@@ -113,31 +113,17 @@ This directory contains the complete single-cell RNA sequencing analysis workflo
 - Runx2 ChIP-seq data (GSE54013)
 - MitoPathways 3.0 gene sets
 
-## Data Flow
+## Key Data Flow
 
 The following diagram illustrates the complete data flow from raw 10X data through all analysis steps, showing key input and output files for each script:
 
 ```mermaid
 graph TD
     A["10X Raw Data<br/>(8 samples)"] --> B["PreprationSeuratObjects/<br/>8 preprocessing scripts"]
-    B --> C1["WT_PF_Seurat.rds"]
-    B --> C2["WT_SAG_Seurat.rds"]
-    B --> C3["Runx2_PF_Seurat.rds"]
-    B --> C4["Runx2_SAG_Seurat.rds"]
-    B --> C5["KO_PF_Seurat.rds"]
-    B --> C6["KO_SAG_Seurat.rds"]
-    B --> C7["DM_PF_Seurat.rds"]
-    B --> C8["DM_SAG_Seurat.rds"]
     
-    C1 --> D["1_integration_suture_scRNAseq.Rmd"]
-    C2 --> D
-    C3 --> D
-    C4 --> D
-    C5 --> D
-    C6 --> D
-    C7 --> D
-    C8 --> D
+    B --> C["<b>8 Individual Seurat Objects</b><br/>(WT, Runx2, KO, DM) × (PF, SAG)<br/>→ 8 *_Seurat.rds files"]
     
+    C --> D["1_integration_suture_scRNAseq.Rmd"]
     D --> E["suture_mes_raw_20230328.rds<br/>(Mesenchymal cells only)"]
     
     E --> F["2_Integration_suture_scRNAseq_mes_to_mitochondria.Rmd"]
@@ -162,7 +148,7 @@ graph TD
     classDef resultStyle fill:#48C0AA,stroke:#333,stroke-width:2px,color:#fff
 
     class B,D,F,H,J,L,N scriptStyle
-    class A,C1,C2,C3,C4,C5,C6,C7,C8,E,G,I,K,O dataStyle
+    class A,C,E,G,I,K,O dataStyle
     class M resultStyle
 ```
 
