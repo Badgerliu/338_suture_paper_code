@@ -115,20 +115,55 @@ This directory contains the complete single-cell RNA sequencing analysis workflo
 
 ## Data Flow
 
-```
-10X Raw Data (8 samples)
-    ↓
-[Preprocessing Scripts] → 8 Individual Seurat Objects
-    ↓
-[Step 1: Integration] → Mesenchymal Cell Object
-    ↓
-[Step 2: Mitochondrial Regression] → Regression-corrected Mesenchymal Cells
-    ↓
-[Step 3: MAGIC Imputation] → Imputed Expression Data
-    ↓
-[Step 4: Downstream Analysis] → Final Osteogenic Cell Populations
-    ↓
-[Step 5: Runx2 Analysis] → Final Results and Target Genes
+The following diagram illustrates the complete data flow from raw 10X data through all analysis steps, showing key input and output files for each script:
+
+```mermaid
+graph TD
+    A["10X Raw Data<br/>(8 samples)"] --> B["PreprationSeuratObjects/<br/>8 preprocessing scripts"]
+    B --> C1["WT_PF_Seurat.rds"]
+    B --> C2["WT_SAG_Seurat.rds"]
+    B --> C3["Runx2_PF_Seurat.rds"]
+    B --> C4["Runx2_SAG_Seurat.rds"]
+    B --> C5["KO_PF_Seurat.rds"]
+    B --> C6["KO_SAG_Seurat.rds"]
+    B --> C7["DM_PF_Seurat.rds"]
+    B --> C8["DM_SAG_Seurat.rds"]
+    
+    C1 --> D["1_integration_suture_scRNAseq.Rmd"]
+    C2 --> D
+    C3 --> D
+    C4 --> D
+    C5 --> D
+    C6 --> D
+    C7 --> D
+    C8 --> D
+    
+    D --> E["suture_mes_raw_20230328.rds<br/>(Mesenchymal cells only)"]
+    
+    E --> F["2_Integration_suture_scRNAseq_mes_to_mitochondria.Rmd"]
+    F --> G["suture_mes_mito_harmony_20230329.rds<br/>(Mito-regressed mesenchymal)"]
+    
+    G --> H["3_MAGIC_imputation_for_suture_mes_SeuratObject.Rmd"]
+    H --> I["suture_mes_mito_MAGIC_harmony_20230329.rds<br/>(MAGIC-imputed)"]
+    
+    I --> J["4_Downstream_analysis_Suture_mes.Rmd"]
+    J --> K["suture_mes_mito_MAGIC_OG_0430.rds<br/>(Final osteogenic populations)"]
+    
+    K --> L["5_Link_Runx2_target_w_mitochondrial_function.Rmd"]
+    L --> M["Final Results & Target Genes<br/>(Ndufs5a discovery)"]
+    
+    N["diffprop_functions.R<br/>(Supporting functions)"] -.-> H
+    N -.-> J
+    
+    O["External Data:<br/>Runx2 ChIP-seq (GSE54013)<br/>MitoPathways 3.0"] -.-> L
+
+    classDef scriptStyle fill:#427AB2,stroke:#333,stroke-width:2px,color:#fff
+    classDef dataStyle fill:#F09148,stroke:#333,stroke-width:2px,color:#fff
+    classDef resultStyle fill:#48C0AA,stroke:#333,stroke-width:2px,color:#fff
+
+    class B,D,F,H,J,L,N scriptStyle
+    class A,C1,C2,C3,C4,C5,C6,C7,C8,E,G,I,K,O dataStyle
+    class M resultStyle
 ```
 
 ## Usage Instructions
