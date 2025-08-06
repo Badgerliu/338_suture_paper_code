@@ -1,0 +1,278 @@
+---
+title: "PF_SAG_suture_miR_RNA_integration"
+author: "Huan Liu"
+date: "2024-12-04"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  echo = TRUE,
+  cache.lazy = FALSE)
+```
+Here we integrated DEG mRNA and miRNA with inverse trends in either PF or SAG suture RNA-seq results. 
+
+
+# 0 Package load
+```{r}
+gc()
+rm(list=ls())
+
+library(ggplot2)
+library(tidyverse)
+library(pheatmap)
+library(edgeR)
+.libPaths(c("/home/liuhuan/rpackage",.libPaths()))
+library(multiMiR)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+
+library(igraph)
+library(ggraph)
+library(tidygraph)
+```
+
+# 1 Import datasets
+```{r, import data}
+suture_miR_UBT <- read.csv("PF_SAG_DEG_miR_UBT_exp.csv")
+suture_miR_DBT <- read.csv("PF_SAG_DEG_miR_DBT_exp.csv")
+
+suture_gene_UBT_sig <- read.csv("PF_SAG_DEG_gene_UBT_sig.csv")
+suture_gene_DBT_sig <- read.csv("PF_SAG_DEG_gene_DBT_sig.csv")
+
+load(url("http://multimir.org/bladder.rda"))
+
+```
+
+
+# 2 Target mRNA of miR_UBT
+
+```{r}
+DBT_gene_vector <- as.character(suture_gene_DBT_sig$target_id)
+UBT_miRNA_vector <- as.character(suture_miR_UBT$miRNA)
+```
+
+```{r}
+UBT_miRNA_DBT_gene <- get_multimir(org     = "mmu",
+                         mirna   = UBT_miRNA_vector,
+                         target  = DBT_gene_vector,
+                         table   = "all",
+                         summary = TRUE,
+                         predicted.cutoff.type = "p",
+                         predicted.cutoff      = 10,
+                         use.tibble = TRUE)
+```
+```{r}
+head(UBT_miRNA_DBT_gene@data)
+```
+
+
+
+```{r}
+UBT_miRNA_result <- UBT_miRNA_DBT_gene@data %>% filter(type == "validated")
+UBT_miRNA_result_unique_pairs <- 
+    UBT_miRNA_result[!duplicated(UBT_miRNA_result[, c("mature_mirna_id", "target_entrez")]), ]
+
+UBT_miRNA_result
+```
+
+```{r}
+write.csv(UBT_miRNA_result, file = "UBT_miRNA_result.csv")
+write.csv(UBT_miRNA_result_unique_pairs, file = "UBT_miRNA_result_unique_pairs.csv")
+```
+##  Targetome of UBT miRNA
+```{r}
+
+# Extract unique rows for target_symbol, target_entrez, and target_ensembl
+UBT_miRNA_unique_targetome <- UBT_miRNA_result_unique_pairs %>%
+  distinct(target_symbol, target_entrez, target_ensembl)
+
+# View the first few rows of the new dataframe
+head(UBT_miRNA_unique_targetome)
+
+# Save the result to a CSV file if needed
+write.csv(UBT_miRNA_unique_targetome, file = "UBT_miRNA_unique_targetome.csv", row.names = FALSE)
+```
+
+# 3 Target mRNA of miR_DBT
+
+```{r}
+# Swap DBT with UBT and vice versa
+UBT_gene_vector <- as.character(suture_gene_UBT_sig$target_id)
+DBT_miRNA_vector <- as.character(suture_miR_DBT$miRNA)
+
+```
+
+```{r}
+DBT_miRNA_UBT_gene <- get_multimir(org     = "mmu",
+                         mirna   = DBT_miRNA_vector,
+                         target  = UBT_gene_vector,
+                         table   = "all",
+                         summary = TRUE,
+                         predicted.cutoff.type = "p",
+                         predicted.cutoff      = 10,
+                         use.tibble = TRUE)
+
+```
+```{r}
+DBT_miRNA_result <- DBT_miRNA_UBT_gene@data %>% filter(type == "validated")
+DBT_miRNA_result_unique_pairs <- 
+    DBT_miRNA_result[!duplicated(DBT_miRNA_result[, c("mature_mirna_id", "target_entrez")]), ]
+
+DBT_miRNA_result
+
+```
+
+```{r}
+write.csv(DBT_miRNA_result, file = "DBT_miRNA_result.csv")
+write.csv(DBT_miRNA_result_unique_pairs, file = "DBT_miRNA_result_unique_pairs.csv")
+
+```
+##  Targetome of DBT miRNA
+```{r}
+
+# Extract unique rows for target_symbol, target_entrez, and target_ensembl
+DBT_miRNA_unique_targetome <- DBT_miRNA_result_unique_pairs %>%
+  distinct(target_symbol, target_entrez, target_ensembl)
+
+# View the first few rows of the new dataframe
+head(DBT_miRNA_unique_targetome)
+
+# Save the result to a CSV file if needed
+write.csv(DBT_miRNA_unique_targetome, file = "DBT_miRNA_unique_targetome.csv", row.names = FALSE)
+```
+
+```{r}
+
+# Extract Entrez IDs
+entrez_ids <- DBT_miRNA_unique_targetome[2]
+
+# Perform GO enrichment analysis
+go <- enrichGO(
+  gene = entrez_ids$target_entrez,
+  OrgDb = org.Mm.eg.db,
+  keyType = 'ENTREZID',
+  ont = "BP", # Biological Process
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+```
+
+
+```{r}
+dotplot(go, showCategory = 20) +
+  ggtitle("Customized GO Enrichment Dot Plot") +
+  theme_minimal() +
+  scale_color_gradient(low = "skyblue", high = "darkblue") +  # Adjust the color gradient
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12)
+  )
+```
+
+
+
+```{r}
+# GO terms of interest
+go_of_interest <- c("GO:0045778","GO:0030501", "GO:0030500","GO:0034440","GO:0050867","GO:0009166","GO:0046034","GO:0008610","GO:0006091","GO:0045333","GO:0085029")
+
+# Filter the GO enrichment results
+go_filtered <- go@result %>%
+  filter(ID %in% go_of_interest)
+
+# Create a new enrichResult object with filtered terms
+go_selected <- new("enrichResult",
+                   result = go_filtered,
+                   pvalueCutoff = go@pvalueCutoff,
+                   pAdjustMethod = go@pAdjustMethod,
+                   organism = go@organism,
+                   ontology = go@ontology,
+                   gene = go@gene,
+                   keytype = go@keytype,
+                   universe = go@universe)
+
+# Generate a dot plot for the selected GO terms
+dotplot(go_selected) +
+  ggtitle("GO Enrichment for Selected Terms") +
+  theme_minimal() +
+  scale_color_gradient(low = "skyblue", high = "darkblue") +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12)
+  )
+```
+
+```{r}
+# Define the corrected list of genes
+gene_list <- c("Alox5", "Bmp2", "Bmp4", "Runx2", "Csf1r", "Fzd9", "Gpm6b", 
+               "Mef2c", "P2rx7", "Ptn", "Rxra", "Slc8a1", "Osr1", "Fam20c", 
+               "Cd276", "Osr2", "Tmem119", "Nell1", "Atraid", "Isg15")
+
+# Subset the dataframe based on the `target_symbol` column
+DBT_miRNA_bone_gene_interactions <- DBT_miRNA_result_unique_pairs %>%
+  filter(target_symbol %in% gene_list)
+
+# View the first few rows of the result
+head(DBT_miRNA_bone_gene_interactions)
+dim(DBT_miRNA_bone_gene_interactions)
+```
+```{r}
+write.csv(DBT_miRNA_bone_gene_interactions, file = "DBT_miRNA_bone_gene_interactions.csv")
+```
+
+
+
+
+```{r}
+# Load necessary libraries
+
+
+# Prepare the data for the network
+network_data <- DBT_miRNA_bone_gene_interactions %>%
+  select(mature_mirna_id, target_symbol) %>%
+  distinct()  # Remove duplicate interactions
+
+# Create an igraph object
+interaction_network <- graph_from_data_frame(network_data, directed = FALSE)
+
+# Add node types to differentiate target symbols and miRNAs
+V(interaction_network)$type <- ifelse(V(interaction_network)$name %in% network_data$target_symbol, "gene", "miRNA")
+
+# Create the circular network plot
+ggraph(interaction_network, layout = "circle") +  # Use circular layout
+  geom_edge_link(aes(), edge_alpha = 0.5) +       # Plot edges
+  geom_node_point(aes(color = type), size = 5) +  # Plot nodes with colors based on type
+  scale_color_manual(values = c("gene" = "navyblue", "miRNA" = "lightcoral")) +  # Set colors
+  geom_node_text(aes(label = name, filter = type == "gene"), repel = TRUE, size = 3, hjust = 1, vjust = 1) +  # Gene labels outside
+  geom_node_text(aes(label = name, filter = type == "miRNA"), repel = TRUE, size = 3, hjust = -1, vjust = -1) +  # miRNA labels inside
+  theme_minimal() +
+  ggtitle("miRNA-Target Interaction Network (Circular Layout)")
+
+```
+```{r}
+# Calculate the degree (number of edges) for each node
+node_degrees <- degree(interaction_network)
+
+# Create a dataframe to display node degrees along with node names
+node_degree_df <- data.frame(
+  node = names(node_degrees),
+  degree = node_degrees
+)
+
+# View the top few rows of the node degree dataframe
+head(node_degree_df)
+
+# If needed, sort by degree in descending order
+node_degree_df <- node_degree_df[order(-node_degree_df$degree), ]
+
+# View sorted degrees
+head(node_degree_df)
+
+```
+

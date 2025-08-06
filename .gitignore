@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# R
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+*.Rproj
+.Rproj.user/
+
+# RStudio
+.Rproj.user
+
+# Temporary files
+*~
+*.swp
+*.swo
+
+# Log files
+*.log
+
+# Output directories that might contain large files
+*/cache/
+*/figure/
+*/results/
+*/plots/

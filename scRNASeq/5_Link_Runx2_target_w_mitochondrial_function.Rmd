@@ -1,0 +1,1056 @@
+---
+title: "suture_mes_mito_MAGIC_Runx2_and_mitochondria"
+author: "Huan Liu"
+date: "2025-03-13"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  echo = TRUE,
+  cache.lazy = FALSE)
+```
+
+This is an analysis pipleline searching and annotating direct target of Runx2 in PF and SAG, which revealed Ndusf5a as a direct common target of Runx2 in PF and SAG.
+
+Input Runx2 ChIP-seq results were referred to GSE54013, published "Wu H, Whitfield TW, Gordon JA, Dobson JR et al. Genomic occupancy of Runx2 with global expression profiling identifies a novel dimension to control of osteoblastogenesis. Genome Biol 2014 Mar 21;15(3):R52. PMID: 24655370". We extracted ChIP-seq results on D0 and D9, trying to covering the pre-osteoblast induction stages.
+
+
+# 0 Load data and packages
+```{r load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+.libPaths(c("/home/liuhuan/rpackage/", "/usr/local/lib/R/site-library"))
+library(ggplot2)
+library(Seurat)
+library(SeuratObject)
+
+seu <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_OG_0430.rds")
+
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+#library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(scCustomize)
+library(pheatmap)
+library(RColorBrewer)
+set.seed(12)
+theme_set(theme_bw())
+
+```
+
+
+```{r,subset Runx2 and WT}
+seu$Genotype <- ifelse(seu$orig.ident %in% c("WT_PF", "WT_SAG"), "WT",
+                ifelse(seu$orig.ident %in% c("KO_PF", "KO_SAG"), "KO",
+                ifelse(seu$orig.ident %in% c("Runx2_PF", "Runx2_SAG"), "Runx2Het",
+                ifelse(seu$orig.ident %in% c("DM_PF", "DM_SAG"), "DM", NA))))
+seu_subset <- subset(seu, subset = (Genotype == "WT" | Genotype == "Runx2Het"))
+table(seu_subset@meta.data[["Genotype"]])
+
+```
+
+
+```{r,save subset object 1}
+saveRDS(seu_subset, file = "./SeuratObject/suture_mes_mito_MAGIC_OG_seurat_Runx2HetVSWT_20240309.rds")
+```
+
+
+# 1 Role of mito in OG population
+## 1.0 Install packages
+```{r,eval=FALSE}
+#options(BioC_mirror="https://mirrors.tuna.tsinghua.edu.cn/bioconductor")
+#BiocManager::install("UCell", force = TRUE)
+```
+
+## 1.1 Load mito genesets
+## 1) load mitocarta
+```{r}
+library(sigPathway)
+```
+
+```{r, load the gmx for mitopathway}
+genesets <- gmxToG("MitoPathways3.0.gmx", verbose = TRUE)
+
+```
+```{r,convert the mito}
+# Use lapply to transform each element of the list
+mito_genesets <- lapply(genesets, function(x) {
+  # x is each sublist in markers, we directly return the 'probes' vector
+  x$probes
+})
+
+# Set the names of the new list elements to the 'src' from the original list
+names(mito_genesets) <- sapply(genesets, function(x) x$src)
+
+# Now new_markers should be in the desired format which can be accepted by Ucell for the downstream scoring
+
+```
+
+```{r, change cases in each element}
+library(tools)
+# Iterate over the markers list and apply the transformation to each element
+mito_genesets <- lapply(mito_genesets, function(x) {
+  # Convert the entire string to lowercase
+  x_lower <- tolower(x)
+  # Capitalize the first letter of each string and return the transformed values without setting names
+  sapply(x_lower, function(y) {
+    paste0(toupper(substr(y, 1, 1)), substr(y, 2, nchar(y)))
+  }, USE.NAMES = FALSE)  # Ensure that names are not set to the transformed values
+})
+
+
+```
+
+```{r,save mito_genesets}
+saveRDS(mito_genesets, file="mitocarta_mouse_3.rds")
+```
+
+
+## 1.2 Score mito in OG with UCell
+1) Prepare the WT OG seurat object
+```{r,prepare the WT OG seurat object}
+seu_subset_WT <- subset(seu_subset, Genotype == "WT")
+```
+2) Load packages
+```{r,load packages 3}
+library(stringr) 
+library(ggplot2) 
+library(viridis)
+library(UCell)
+```
+
+3) test run
+```{r,test score with ucell, fig.width=12.5, fig.height=5}
+seu_subset_WT <- subset(seu_subset, Genotype == "WT")
+
+# Subset the first 7 elements of the mito_genesets list
+markers_subset <- mito_genesets[1:7]
+
+# Apply the AddModuleScore_UCell function to the subset
+marker_score_subset <- AddModuleScore_UCell(seu_subset_WT, features=markers_subset)
+
+# Extract the column names that end with "_UCell" from the metadata
+a_subset <- colnames(marker_score_subset@meta.data) %>% str_subset("_UCell")
+
+# Create a feature plot for the subset using the specified column names
+# Note: Adjust the FeaturePlot and viridis functions according to your specific library or requirements
+feature_plot_subset <- FeaturePlot(marker_score_subset, features = a_subset, order = TRUE, ncol = 4, cols = viridis(256))
+
+# Print or plot the feature plot
+print(feature_plot_subset)
+
+
+ggsave("./OutputFigure/test.pdf", plot = feature_plot_subset, width = 25, height = 10)
+```
+
+```{r, score all term,fig.width=12.5, fig.height=5}
+seu_subset_WT <- subset(seu_subset, Genotype == "WT")
+
+# Check if the "OutputFigure" directory exists; if not, create it
+if (!dir.exists("OutputFigure")) {
+  dir.create("OutputFigure")
+}
+
+# Split the list into batches of 7 elements each
+marker_batches <- split(mito_genesets, ceiling(seq_along(mito_genesets) / 7))
+
+# Initialize an empty list to store results
+batch_scores <- list()
+
+# Loop through each batch
+for (i in seq_along(marker_batches)) {
+  batch <- marker_batches[[i]]
+  
+  # Apply the AddModuleScore_UCell function to each batch
+  batch_scores[[i]] <- AddModuleScore_UCell(seu_subset_WT, features = batch)
+  
+  # Extract the column names that match "_UCell"
+  a <- colnames(batch_scores[[i]]@meta.data) %>% str_subset("_UCell")
+  
+  # Plot
+  p <- FeaturePlot(batch_scores[[i]], features = a, order = TRUE, ncol = 4, cols = viridis(256))
+  
+  # Define the filename for the plot
+  plot_filename <- sprintf("OutputFigure/suture_mes_mito_MAGIC_mito_score_%d_plot.png", i)
+  
+  # Save the plot
+  ggsave(plot_filename, plot = p, width = 25, height = 10)
+}
+```
+
+```{r,fig.width=5,fig.height=5}
+
+seu_subset_WT <- subset(seu_subset, Genotype == "WT")
+
+# Split the mito_genesets list into sublists of 9 genes each
+gene_batches <- split(mito_genesets, ceiling(seq_along(mito_genesets) / 9))
+
+# Loop through each batch of genes
+for (i in seq_along(gene_batches)) {
+  # Update seu_subset_WT with the module scores for the current batch of genes
+  seu_subset_WT_updated <- AddModuleScore_UCell(seu_subset_WT, features = gene_batches[[i]])
+  
+  # Construct the names for the module scores
+  signature.names <- paste0(names(gene_batches[[i]]), "_UCell")
+  
+  # Create the violin plot for the current batch of genes
+  p <- VlnPlot(seu_subset_WT_updated, features = signature.names, group.by = "celltype", pt.size = 0) + ggtitle(sprintf("Batch %d", i))
+  
+  # Define the filename for the current plot
+  plot_filename <- sprintf("OutputFigure/suture_mes_mito_MAGIC_mito_score_%d_vlnplot.png", i)
+  
+  # Save the plot
+  ggsave(plot_filename, plot = p, width = 20, height = 20)
+}
+
+```
+
+## 1.3 Compare mito in SAG
+1) Prepare the SAG seurat object
+```{r,prepare the SAG seurat object}
+mito_genesets <- readRDS(file = "./mitocarta_mouse_3.rds")
+seu_subset_SAG <- subset(seu_subset, group == "SAG")
+```
+2) Load packages
+```{r,load packages 3}
+library(stringr) 
+library(ggplot2) 
+library(viridis)
+library(UCell)
+```
+
+3) Score vlnplot
+```{r,fig.width=5,fig.height=5}
+
+seu_subset_SAG <- subset(seu_subset, group == "SAG")
+# Split the mito_genesets list into sublists of 9 genes each
+gene_batches <- split(mito_genesets, ceiling(seq_along(mito_genesets) / 9))
+
+# Loop through each batch of genes
+for (i in seq_along(gene_batches)) {
+  # Update seu_subset_SAG with the module scores for the current batch of genes
+  seu_subset_SAG_updated <- AddModuleScore_UCell(seu_subset_SAG, features = gene_batches[[i]])
+  
+  # Construct the names for the module scores
+  signature.names <- paste0(names(gene_batches[[i]]), "_UCell")
+  
+  # Get the first few gene names to include in the title, to avoid a title that's too long
+  gene_names_for_title <- paste(names(gene_batches[[i]]), collapse = ", ")
+  if (nchar(gene_names_for_title) > 50) {  # If the title is too long, truncate it
+    gene_names_for_title <- paste0(substr(gene_names_for_title, 1, 47), "...")
+  }
+  
+  # Create the violin plot for the current batch of genes with a dynamic title
+  p <- VlnPlot(seu_subset_SAG_updated, features = signature.names, group.by = "Genotype", pt.size = 0) +
+    theme(strip.text = element_text(size = 10))  # Adjust title size as needed
+
+  # Define the filename for the current plot
+  plot_filename <- sprintf("OutputFigure/suture_mes_mito_MAGIC_mito_SAG_score_%d_vlnplot.png", i)
+  
+  # Save the plot
+  ggsave(plot_filename, plot = p, width = 20, height = 20)
+}
+```
+
+```{r,Ucell umap plot for respiration in SAG, fig.width=5, fig.height=10}
+seu_subset_SAG <- subset(seu_subset, group == "SAG")
+
+# Subset the first 7 elements of the mito_genesets list
+markers_subset <- mito_genesets[c("Respirasome_assembly","OXPHOS","Complex_I","Complex_II","Complex_III")]
+
+# Apply the AddModuleScore_UCell function to the subset
+marker_score_subset <- AddModuleScore_UCell(seu_subset_SAG, features=markers_subset)
+
+# Extract the column names that end with "_UCell" from the metadata
+a_subset <- colnames(marker_score_subset@meta.data) %>% str_subset("_UCell")
+
+# Create a feature plot for the subset using the specified column names
+# Note: Adjust the FeaturePlot and viridis functions according to your specific library or requirements
+feature_plot_subset <- FeaturePlot(marker_score_subset, features = a_subset,
+                                   split.by  = "Genotype",
+                                   order = TRUE, ncol = 4, cols = viridis(256))
+
+# Print or plot the feature plot
+print(feature_plot_subset)
+
+
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_mito_SAG_suture_score_OXPHOS.pdf", plot = feature_plot_subset, width = 15, height =30)
+```
+
+
+## 1.4 Compare mito in PF
+1) Prepare the PF seurat object
+```{r,prepare the PF seurat object}
+
+seu_subset_PF <- subset(seu_subset, group == "PF")
+```
+2) Load packages
+```{r,load packages 3}
+library(stringr) 
+library(ggplot2) 
+library(viridis)
+library(UCell)
+```
+
+3) Score vlnplot
+```{r,fig.width=5,fig.height=5}
+
+seu_subset_PF <- subset(seu_subset, group == "PF")
+
+# Split the mito_genesets list into sublists of 9 genes each
+gene_batches <- split(mito_genesets, ceiling(seq_along(mito_genesets) / 9))
+
+# Loop through each batch of genes
+for (i in seq_along(gene_batches)) {
+  # Update seu_subset_PF with the module scores for the current batch of genes
+  seu_subset_PF_updated <- AddModuleScore_UCell(seu_subset_PF, features = gene_batches[[i]])
+  
+  # Construct the names for the module scores
+  signature.names <- paste0(names(gene_batches[[i]]), "_UCell")
+  
+  # Create the violin plot for the current batch of genes
+  p <- VlnPlot(seu_subset_PF_updated, features = signature.names, group.by = "Genotype", pt.size = 0) +
+    theme(strip.text = element_text(size = 10))  # Adjust title size as needed
+  
+  # Define the filename for the current plot
+  plot_filename <- sprintf("OutputFigure/suture_mes_mito_MAGIC_mito_PF_score_%d_vlnplot.png", i)
+  
+  # Save the plot
+  ggsave(plot_filename, plot = p, width = 20, height = 20)
+}
+
+```
+
+```{r,Ucell umap plot for respiration in PF, fig.width=5, fig.height=10}
+seu_subset_PF <- subset(seu_subset, group == "PF")
+
+# Subset the first 7 elements of the mito_genesets list
+markers_subset <- mito_genesets[c("Respirasome_assembly","OXPHOS","Complex_I","Complex_II","Complex_III")]
+
+# Apply the AddModuleScore_UCell function to the subset
+marker_score_subset <- AddModuleScore_UCell(seu_subset_PF, features=markers_subset)
+
+# Extract the column names that end with "_UCell" from the metadata
+a_subset <- colnames(marker_score_subset@meta.data) %>% str_subset("_UCell")
+
+# Create a feature plot for the subset using the specified column names
+# Note: Adjust the FeaturePlot and viridis functions according to your specific library or requirements
+feature_plot_subset <- FeaturePlot(marker_score_subset, features = a_subset,
+                                   split.by  = "Genotype",
+                                   order = TRUE, ncol = 4, cols = viridis(256))
+
+# Print or plot the feature plot
+print(feature_plot_subset)
+
+
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_mito_PF_suture_score_OXPHOS.pdf", plot = feature_plot_subset, width = 15, height =30)
+```
+
+```{r, test plot for PF, fig.height=15, fig.width=5}
+DefaultAssay(seu_subset) <- "MAGIC_SCT"
+FeaturePlot(seu_subset, features = c("mt-Co1","mt-Atp6",
+                                         "Ndufs5", "Neat1","Runx2","Ibsp"),
+           cols = c("grey85",brewer.pal(9,"YlOrRd")),
+           ncol=2, pt.size = 0.1, split.by = "Genotype", label=TRUE)+xlim(-7,7)+ylim(-7,7)
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_mito_geneplot.pdf", device = "pdf", width = 10, height = 30)
+```
+
+
+## 1.5 Compare mito in PF and SAG in WT
+1) Prepare the WT seurat object 2
+```{r,prepare the WT seurat object 2}
+
+seu_subset_WT <- subset(seu_subset, Genotype == "WT")
+```
+2) Load packages
+```{r,load packages 3}
+library(stringr) 
+library(ggplot2) 
+library(viridis)
+library(UCell)
+```
+
+3) Score vlnplot
+```{r,fig.width=5,fig.height=5}
+
+seu_subset_WT <- subset(seu_subset, Genotype == "WT")
+
+# Split the mito_genesets list into sublists of 9 genes each
+gene_batches <- split(mito_genesets, ceiling(seq_along(mito_genesets) / 9))
+
+# Loop through each batch of genes
+for (i in seq_along(gene_batches)) {
+  # Update seu_subset_WT with the module scores for the current batch of genes
+  seu_subset_WT_updated <- AddModuleScore_UCell(seu_subset_WT, features = gene_batches[[i]])
+  
+  # Construct the names for the module scores
+  signature.names <- paste0(names(gene_batches[[i]]), "_UCell")
+  
+  # Create the violin plot for the current batch of genes
+  p <- VlnPlot(seu_subset_WT_updated, features = signature.names, group.by = "group", pt.size = 0) +
+    theme(strip.text = element_text(size = 10))  # Adjust title size as needed
+  
+  # Define the filename for the current plot
+  plot_filename <- sprintf("OutputFigure/suture_mes_mito_MAGIC_mito_WT_suture_score_%d_vlnplot.png", i)
+  
+  # Save the plot
+  ggsave(plot_filename, plot = p, width = 20, height = 20)
+}
+
+```
+UCell Umap plot
+```{r,Ucell umap plot for respiration, fig.width=5, fig.height=10}
+seu_subset_WT <- subset(seu_subset, Genotype == "WT")
+
+# Subset the first 7 elements of the mito_genesets list
+markers_subset <- mito_genesets[c("Respirasome_assembly","OXPHOS","Complex_I","Complex_II","Complex_III")]
+
+# Apply the AddModuleScore_UCell function to the subset
+marker_score_subset <- AddModuleScore_UCell(seu_subset_WT, features=markers_subset)
+
+# Extract the column names that end with "_UCell" from the metadata
+a_subset <- colnames(marker_score_subset@meta.data) %>% str_subset("_UCell")
+
+# Create a feature plot for the subset using the specified column names
+# Note: Adjust the FeaturePlot and viridis functions according to your specific library or requirements
+feature_plot_subset <- FeaturePlot(marker_score_subset, features = a_subset,
+                                   split.by  = "group",
+                                   order = TRUE, ncol = 4, cols = viridis(256))
+
+# Print or plot the feature plot
+print(feature_plot_subset)
+
+
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_mito_WT_suture_score_OXPHOS.pdf", plot = feature_plot_subset, width = 15, height =30)
+```
+
+```{r, test plot for PF, fig.height=15, fig.width=5}
+DefaultAssay(seu_subset_WT) <- "MAGIC_SCT"
+FeaturePlot(seu_subset_WT, features = c("mt-Co1","mt-Atp6",
+                                         "Ndufs5", "Neat1","Runx2","Ibsp"),
+           cols = c("grey85",brewer.pal(9,"YlOrRd")),
+           ncol=2, pt.size = 0.1, split.by = "group", label=TRUE)+xlim(-7,7)+ylim(-7,7)
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_mito_PF_SAG_geneplot.pdf", device = "pdf", width = 10, height = 30)
+```
+
+
+
+
+
+
+# 2 Analyze target genes of Runx2
+refer to the threads `https://hbctraining.github.io/Intro-to-ChIPseq/lessons/12_functional_analysis.html`
+## 2.0 Prepare librarya and database
+```{r, load library 2}
+# Load libraries
+library(ChIPseeker)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene
+#options(BioC_mirror="https://mirrors.tuna.tsinghua.edu.cn/bioconductor")
+#BiocManager::install("EnsDb.Mmusculus.v79")
+library(EnsDb.Mmusculus.v79)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(dplyr)
+```
+
+```{r,load data}
+# Load data
+samplefiles <- list.files(".", pattern= ".bed", full.names=T)
+samplefiles <- as.list(samplefiles)
+names(samplefiles) <- c("Runx2_D0", "Runx2_D9")
+```
+
+## 2.1 Annotate Runx2 ChIP-seq peaks in MC3T3
+1) Annotate peaks
+```{r, annotate peaks}
+peakAnnoList <- lapply(samplefiles, annotatePeak, TxDb=txdb, 
+                       tssRegion=c(-5000, 5000), verbose=FALSE)
+```
+
+2) Retrieve annotation
+```{r, retrieve annotation}
+peakAnnoList
+```
+
+```{r,plot genomic distributions}
+plotAnnoBar(peakAnnoList)
+```
+```{r,plot distances distrubition}
+plotDistToTSS(peakAnnoList, title="Distribution of transcription factor-binding loci \n relative to TSS")
+
+```
+4) save annotation for Runx2_D0
+```{r, convert D0_annot}
+D0_annot <- data.frame(peakAnnoList[["Runx2_D0"]]@anno)
+head(D0_annot)
+```
+We need to convert transcriptId to gene symbol, but noticed that the id ended with `.#`
+```{r, remove the .# in the transcriptId}
+D0_annot$transcriptId <- gsub("\\.\\d+$", "", D0_annot$transcriptId)
+```
+
+```{r, annotate D0}
+# Get the entrez IDs
+entrez_D0 <- D0_annot$geneId
+
+# Return the gene symbol for the set of Entrez IDs
+annotations_edb <- AnnotationDbi::select(EnsDb.Mmusculus.v79,
+                                         keys = entrez_D0,
+                                         columns = c("GENENAME"),
+                                         keytype = "ENTREZID")
+
+# Change IDs to character type to merge
+annotations_edb$ENTREZID <- as.character(annotations_edb$ENTREZID)
+
+# Write to file
+D0_annot %>% 
+  left_join(annotations_edb, by=c("geneId"="ENTREZID")) %>% 
+  write.table(file="./OutputTable/D0_annot_peak_annotation.txt", sep="\t", quote=F, row.names=F)
+D0_annot_peak_annotation <- read.table(file="./OutputTable/D0_annot_peak_annotation.txt", sep="\t")%>%
+  purrr::set_names(as.character(slice(., 1))) %>%
+  slice(-1)
+```
+
+```{r,check structure of D0}
+head(D0_annot_peak_annotation)
+```
+## 1) D0 target
+```{r,D0_target}
+D0_target <- unique(D0_annot_peak_annotation$GENENAME) 
+```
+
+
+5) Function enrichment assay for Runx2_D0
+```{r,BP annotation for Runx2_D0}
+# Run GO enrichment analysis 
+ego_D0 <- enrichGO(gene = entrez_D0, 
+                    keyType = "ENTREZID", 
+                    OrgDb = org.Mm.eg.db, 
+                    ont = "BP", 
+                    pAdjustMethod = "BH", 
+                    qvalueCutoff = 0.05, 
+                    readable = TRUE)
+
+```
+
+```{r,dotplot for ego_D0, fig.height=20, fig.width=10}
+# Dotplot visualization
+dotplot(ego_D0, showCategory=50)
+```
+
+
+
+
+```{r,output BP enrichment assay for Runx2_D0}
+# Output results from GO ego_D0 analysis to a table
+cluster_summary <- data.frame(ego_D0)
+write.csv(cluster_summary, "./OutputTable/clusterProfiler_Runx2_D0.csv")
+```
+
+
+
+```{r,ekegg for Runx2_D0,fig.width=10,fig.height=10}
+ekegg_D0 <- enrichKEGG(gene = entrez_D0,
+                 organism = 'mmu',
+                 pvalueCutoff = 0.05)
+
+dotplot(ekegg_D0)
+```
+
+
+6) save annotation for Runx2_D9
+```{r, convert D9_annot}
+D9_annot <- data.frame(peakAnnoList[["Runx2_D9"]]@anno)
+head(D9_annot)
+```
+We need to convert transcriptId to gene symbol, but noticed that the id ended with `.#`
+```{r, remove the .# in the transcriptId}
+D9_annot$transcriptId <- gsub("\\.\\d+$", "", D9_annot$transcriptId)
+```
+
+```{r, annotate D9}
+# Get the entrez IDs
+entrez_D9 <- D9_annot$geneId
+
+# Return the gene symbol for the set of Entrez IDs
+annotations_edb <- AnnotationDbi::select(EnsDb.Mmusculus.v79,
+                                         keys = entrez_D9,
+                                         columns = c("GENENAME"),
+                                         keytype = "ENTREZID")
+
+# Change IDs to character type to merge
+annotations_edb$ENTREZID <- as.character(annotations_edb$ENTREZID)
+
+# Write to file
+D9_annot %>% 
+  left_join(annotations_edb, by=c("geneId"="ENTREZID")) %>% 
+  write.table(file="./OutputTable/D9_annot_peak_annotation.txt", sep="\t", quote=F, row.names=F)
+
+D9_annot_peak_annotation <- read.table(file="./OutputTable/D9_annot_peak_annotation.txt", sep="\t")%>%
+  purrr::set_names(as.character(slice(., 1))) %>%
+  slice(-1)
+
+```
+
+```{r,check structure of D9 annotation}
+head(D9_annot_peak_annotation)
+```
+## 2) D9 target
+```{r,D9_target}
+D9_target <- unique(D9_annot_peak_annotation$GENENAME) 
+```
+
+```{r,BP annotation for Runx2_D9}
+# Run GO enrichment analysis 
+ego_D9 <- enrichGO(gene = entrez_D9, 
+                    keyType = "ENTREZID", 
+                    OrgDb = org.Mm.eg.db, 
+                    ont = "BP", 
+                    pAdjustMethod = "BH", 
+                    qvalueCutoff = 0.05, 
+                    readable = TRUE)
+
+```
+
+```{r,dotplot for ego_D9, fig.height=20, fig.width=10}
+# Dotplot visualization
+dotplot(ego_D9, showCategory=50)
+```
+
+
+
+
+```{r,output BP enrichment assay for Runx2_D9}
+# Output results from GO ego_D9 analysis to a table
+cluster_summary <- data.frame(ego_D9)
+write.csv(cluster_summary, "./OutputTable/clusterProfiler_Runx2_D9.csv")
+```
+
+
+
+```{r,ekegg for Runx2_D9,fig.width=10,fig.height=10}
+ekegg_D9 <- enrichKEGG(gene = entrez_D9,
+                 organism = 'mmu',
+                 pvalueCutoff = 0.05)
+
+dotplot(ekegg_D9)
+```
+
+# 3 Analyze DEGs in OG3 between WT and Het
+## 3.0 load packages and datasets
+```{r load of packages and setup of the environment 2}
+gc()
+rm(list=ls())
+library(Seurat)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(scCustomize)
+library(pheatmap)
+library(RColorBrewer)
+set.seed(12)
+theme_set(theme_bw())
+
+seu_subset <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_OG_seurat_Runx2HetVSWT_20240309.rds")
+```
+## 3.1 Prepare data and test run
+1) Subset OG3 in WT and Het
+```{r,subset OG3}
+seu_subset_OG3 <- subset(seu_subset, celltype == "OG3")
+seu_subset_OG3_PF <- subset(seu_subset_OG3, Tissue == "PF")
+seu_subset_OG3_SAG <- subset(seu_subset_OG3, Tissue == "SAG")
+```
+
+2) Find DEGs in OG3 using FindMarkers
+```{r, DEGs in OG3}
+
+OG3_DEGs <- FindMarkers(seu_subset_OG3,
+                        min.pct = 0,
+                        logfc.threshold = 0.25,
+                        group.by = 'Genotype',
+                        ident.1 ="Runx2Het",
+                        ident.2="WT")
+
+OG3_DEGs_Findmarker_sig <- OG3_DEGs[OG3_DEGs$p_val < 0.1 &
+                                      abs(OG3_DEGs$avg_log2FC) > 0.25, ]
+```
+
+
+
+2) test plot
+```{r, test plot 1, fig.height=10, fig.width=5}
+DefaultAssay(seu_subset) <- "RNA"
+FeaturePlot(seu_subset, features = c("Xist","Rgcc",
+                                          "Lepr", "Dmp1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1, split.by = "Genotype", label=TRUE)+xlim(-7,7)+ylim(-7,7)
+
+```
+
+
+## 3.2 DEGs in PF
+
+```{r, DEGs in OG3_PF}
+
+OG3_PF_DEGs <- FindMarkers(seu_subset_OG3_PF,
+                        min.pct = 0,
+                        logfc.threshold = 0.25,
+                        group.by = 'Genotype',
+                        ident.1 ="Runx2Het",
+                        ident.2="WT")
+
+OG3_PF_DEGs_Findmarker_sig <- OG3_PF_DEGs[OG3_PF_DEGs$p_val < 0.1 &
+                                      abs(OG3_PF_DEGs$avg_log2FC) > 0.25, ]
+```
+```{r}
+head(OG3_PF_DEGs_Findmarker_sig)
+```
+```{r, test plot 2, fig.height=10, fig.width=5}
+DefaultAssay(seu_subset_OG3_PF) <- "RNA"
+FeaturePlot(seu_subset_OG3_PF, features = c("Xist","Rgcc",
+                                          "Lepr", "Dmp1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1, split.by = "Genotype", label=TRUE)+xlim(-7,7)+ylim(-7,7)
+
+```
+```{r,OG3_PF_DEGs_Findmarker_sig_down}
+OG3_PF_DEGs_Findmarker_sig_down <- OG3_PF_DEGs_Findmarker_sig %>% filter(pct.2>=0.1, avg_log2FC <0)
+head(OG3_PF_DEGs_Findmarker_sig_down)
+OG3_PF_DEGs_Findmarker_sig_down$GENENAME <- rownames(OG3_PF_DEGs_Findmarker_sig_down)
+head(OG3_PF_DEGs_Findmarker_sig_down)
+```
+
+
+## 3.3 Direct target DEGs in PF
+1) Get D9 target
+```{r,load D9 gene sets 1}
+D9_annot_peak_annotation <- read.table(file="./OutputTable/D9_annot_peak_annotation.txt", sep="\t")%>%
+  purrr::set_names(as.character(slice(., 1))) %>%
+  slice(-1)
+
+```
+2) Get genes in PF direclty downregulated by Runx2-Het
+
+
+```{r,get the chip info for all PF_OG3_DEG}
+PF_OG3_direct_DEG_chipinfo <- inner_join(D9_annot_peak_annotation,OG3_PF_DEGs_Findmarker_sig_down,by="GENENAME")
+PF_OG3_direct_DEG <- unique(PF_OG3_direct_DEG_chipinfo$GENENAME) # extract direct target
+write.csv(PF_OG3_direct_DEG_chipinfo, file="./OutputTable/PF_OG3_direct_DEG_Runx2ChIP.csv",row.names = FALSE)
+```
+
+## 3.4 DEGs in SAG
+```{r, DEGs in OG3_SAG}
+
+OG3_SAG_DEGs <- FindMarkers(seu_subset_OG3_SAG,
+                        min.pct = 0,
+                        logfc.threshold = 0.25,
+                        group.by = 'Genotype',
+                        ident.1 ="Runx2Het",
+                        ident.2="WT")
+
+OG3_SAG_DEGs_Findmarker_sig <- OG3_SAG_DEGs[OG3_SAG_DEGs$p_val < 0.1 &
+                                      abs(OG3_SAG_DEGs$avg_log2FC) > 0.25, ]
+```
+
+```{r,OG3_SAG_DEGs_Findmarker_sig_down}
+OG3_SAG_DEGs_Findmarker_sig_down <- OG3_SAG_DEGs_Findmarker_sig %>% filter(pct.2>=0.1, avg_log2FC <0)
+head(OG3_SAG_DEGs_Findmarker_sig_down)
+OG3_SAG_DEGs_Findmarker_sig_down$GENENAME <- rownames(OG3_SAG_DEGs_Findmarker_sig_down)
+head(OG3_SAG_DEGs_Findmarker_sig_down)
+```
+
+## 3.5 Direct target DEGs in SAG
+```{r,load target in D9 2}
+D9_annot_peak_annotation <- read.table(file="./OutputTable/D9_annot_peak_annotation.txt", sep="\t")%>%
+  purrr::set_names(as.character(slice(., 1))) %>%
+  slice(-1)
+D9_target <- unique(D9_annot_peak_annotation$GENENAME) 
+```
+```{r,get the chip info for all SAG_OG3_DEG}
+SAG_OG3_direct_DEG_chipinfo <- inner_join(D9_annot_peak_annotation,OG3_SAG_DEGs_Findmarker_sig_down,by="GENENAME")
+SAG_OG3_direct_DEG <- unique(SAG_OG3_direct_DEG_chipinfo$GENENAME) # extract direct target
+write.csv(SAG_OG3_direct_DEG_chipinfo, file="./OutputTable/SAG_OG3_direct_DEG_Runx2ChIP.csv",row.names = FALSE)
+```
+
+# 4 Analyze DEGs in other OGs between WT and Het
+## 4.1 Prepare data and test run
+1) Subset other OGs in WT and Het
+```{r,subset OG3}
+seu_subset_otherOG <- subset(seu_subset, celltype == "OG3", invert=TRUE)
+seu_subset_otherOG_PF <- subset(seu_subset_otherOG, Tissue == "PF")
+seu_subset_otherOG_SAG <- subset(seu_subset_otherOG, Tissue == "SAG")
+```
+
+2) Find DEGs in other OGs using FindMarkers
+```{r, DEGs in other OGs}
+
+otherOG_DEGs <- FindMarkers(seu_subset_otherOG,
+                        min.pct = 0,
+                        logfc.threshold = 0.25,
+                        group.by = 'Genotype',
+                        ident.1 ="Runx2Het",
+                        ident.2="WT")
+
+otherOG_DEGs_Findmarker_sig <- otherOG_DEGs[otherOG_DEGs$p_val < 0.1 &
+                                      abs(otherOG_DEGs$avg_log2FC) > 0.25, ]
+```
+
+
+
+2) test plot
+```{r, test plot 1, fig.height=10, fig.width=5}
+#DefaultAssay(seu_subset) <- "MAGIC_SCT"
+#FeaturePlot(seu_subset, features = c("Xist","Rgcc",
+#                                          "Lepr", "Dmp1"),
+#            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+#            ncol=2, pt.size = 0.1, split.by = "Genotype", label=TRUE)+xlim(-7,7)+ylim(-7,7)
+
+```
+
+
+## 4.2 DEGs in PF
+
+```{r, DEGs in other OGs PF}
+
+otherOG_PF_DEGs <- FindMarkers(seu_subset_otherOG_PF,
+                        min.pct = 0,
+                        logfc.threshold = 0.25,
+                        group.by = 'Genotype',
+                        ident.1 ="Runx2Het",
+                        ident.2="WT")
+
+otherOG_PF_DEGs_Findmarker_sig <- otherOG_PF_DEGs[otherOG_PF_DEGs$p_val < 0.1 &
+                                      abs(otherOG_PF_DEGs$avg_log2FC) > 0.25, ]
+```
+
+```{r,otherOG_PF_DEGs_Findmarker_sig_down}
+otherOG_PF_DEGs_Findmarker_sig_down <- otherOG_PF_DEGs_Findmarker_sig %>% filter(pct.2>=0.1, avg_log2FC <0)
+head(otherOG_PF_DEGs_Findmarker_sig_down)
+otherOG_PF_DEGs_Findmarker_sig_down$GENENAME <- rownames(otherOG_PF_DEGs_Findmarker_sig_down)
+head(otherOG_PF_DEGs_Findmarker_sig_down)
+```
+
+## 4.3 Direct target DEGs in PF
+
+1) Get D0 target
+```{r,load target D0 1}
+D0_annot_peak_annotation <- read.table(file="./OutputTable/D0_annot_peak_annotation.txt", sep="\t")%>%
+  purrr::set_names(as.character(slice(., 1))) %>%
+  slice(-1)
+D0_target <- unique(D0_annot_peak_annotation$GENENAME) 
+```
+
+2) Get genes in PF direclty downregulated by Runx2-Het
+```{r,get the chip info for all PF_OG3_DEG}
+PF_otherOG_direct_DEG_chipinfo <- inner_join(D0_annot_peak_annotation,otherOG_PF_DEGs_Findmarker_sig_down,by="GENENAME")
+PF_otherOG_direct_DEG <- unique(PF_otherOG_direct_DEG_chipinfo$GENENAME) # extract direct target
+write.csv(PF_otherOG_direct_DEG_chipinfo, file="./OutputTable/PF_otherOG_direct_DEG_Runx2ChIP.csv",row.names = FALSE)
+```
+
+
+## 4.4 DEGs in SAG
+```{r, DEGs in other OGs SAG}
+
+otherOG_SAG_DEGs <- FindMarkers(seu_subset_otherOG_SAG,
+                        min.pct = 0,
+                        logfc.threshold = 0.25,
+                        group.by = 'Genotype',
+                        ident.1 ="Runx2Het",
+                        ident.2="WT")
+
+otherOG_SAG_DEGs_Findmarker_sig <- otherOG_SAG_DEGs[otherOG_SAG_DEGs$p_val < 0.1 &
+                                      abs(otherOG_SAG_DEGs$avg_log2FC) > 0.25, ]
+```
+
+
+
+```{r,otherOG_SAG_DEGs_Findmarker_sig_down}
+otherOG_SAG_DEGs_Findmarker_sig_down <- otherOG_SAG_DEGs_Findmarker_sig %>% filter(pct.2>=0.1, avg_log2FC <0)
+head(otherOG_SAG_DEGs_Findmarker_sig_down)
+otherOG_SAG_DEGs_Findmarker_sig_down$GENENAME <- rownames(otherOG_SAG_DEGs_Findmarker_sig_down)
+head(otherOG_SAG_DEGs_Findmarker_sig_down)
+```
+
+## 4.5 Direct target DEGs in SAG
+
+1) Get D0 target
+```{r,load target D0 1}
+D0_annot_peak_annotation <- read.table(file="./OutputTable/D0_annot_peak_annotation.txt", sep="\t")%>%
+  purrr::set_names(as.character(slice(., 1))) %>%
+  slice(-1)
+D0_target <- unique(D0_annot_peak_annotation$GENENAME) 
+```
+
+2) Get genes in SAG direclty downregulated by Runx2-Het
+```{r,get the chip info for all SAG_otherOG_DEG}
+SAG_otherOG_direct_DEG_chipinfo <- inner_join(D0_annot_peak_annotation,otherOG_SAG_DEGs_Findmarker_sig_down,by="GENENAME")
+SAG_otherOG_direct_DEG <- unique(SAG_otherOG_direct_DEG_chipinfo$GENENAME) # extract direct target
+write.csv(SAG_otherOG_direct_DEG_chipinfo, file="./OutputTable/SAG_otherOG_direct_DEG_Runx2ChIP.csv",row.names = FALSE)
+```
+
+# 5 Direct mito targets of Runx2
+## 5.0 load related genes
+1) Load mito related genesets
+According to our previous analysis in 1.3 and 1.4, we are specifically interested in genes related with OXPHOS
+```{r,load mito related genesets}
+mito_genesets <- readRDS(file = "./mitocarta_mouse_3.rds")
+markers_subset <- mito_genesets[c("Respirasome_assembly","OXPHOS","Complex_I","Complex_II","Complex_III")]
+```
+
+```{r}
+resp_set <- as.data.frame(mito_genesets["Respirasome_assembly"]) 
+colnames(resp_set)="GENENAME"
+oxph_set <- as.data.frame(mito_genesets["OXPHOS"])
+colnames(oxph_set)="GENENAME"
+CI_set <- as.data.frame(mito_genesets["Complex_I"])
+colnames(CI_set)="GENENAME"
+CII_set <- as.data.frame(mito_genesets["Complex_II"])
+colnames(CII_set)="GENENAME"
+CIII_set <- as.data.frame(mito_genesets["Complex_III"])
+colnames(CIII_set)="GENENAME"
+```
+
+2) Load target DEGs in PF and SAG
+```{r,load DEGs in PF and SAG}
+SAG_otherOG_direct_DEG_chipinfo <- read.csv(file="./OutputTable/SAG_otherOG_direct_DEG_Runx2ChIP.csv")
+PF_otherOG_direct_DEG_chipinfo <- read.csv(file="./OutputTable/PF_otherOG_direct_DEG_Runx2ChIP.csv")
+PF_OG3_direct_DEG_chipinfo <- read.csv(file="./OutputTable/PF_OG3_direct_DEG_Runx2ChIP.csv")
+SAG_OG3_direct_DEG_chipinfo <- read.csv(file="./OutputTable/SAG_OG3_direct_DEG_Runx2ChIP.csv")
+
+```
+
+## 5.1 Runx2 target mito genes in PF
+1) Target mito DEGs in PF_OG3
+```{r}
+resp_PF_OG3 <- inner_join(resp_set,PF_OG3_direct_DEG_chipinfo, by ="GENENAME")
+oxph_PF_OG3 <- inner_join(oxph_set,PF_OG3_direct_DEG_chipinfo, by ="GENENAME")
+CI_PF_OG3 <- inner_join(CI_set,PF_OG3_direct_DEG_chipinfo, by ="GENENAME")
+CII_PF_OG3 <- inner_join(CII_set,PF_OG3_direct_DEG_chipinfo, by ="GENENAME")
+CIII_PF_OG3 <- inner_join(CIII_set,PF_OG3_direct_DEG_chipinfo, by ="GENENAME")
+```
+
+```{r}
+write.csv(oxph_PF_OG3, file = "./OutputTable/oxph_PF_OG3_Runx2ChIP.csv", row.names = FALSE)
+write.csv(CI_PF_OG3, file = "./OutputTable/CI_PF_OG3_Runx2ChIP.csv", row.names = FALSE)
+
+```
+
+
+
+2) Target mito DEGs in PF_otherOG
+```{r}
+resp_PF_otherOG <- inner_join(resp_set,PF_otherOG_direct_DEG_chipinfo, by ="GENENAME")
+oxph_PF_otherOG <- inner_join(oxph_set,PF_otherOG_direct_DEG_chipinfo, by ="GENENAME")
+CI_PF_otherOG <- inner_join(CI_set,PF_otherOG_direct_DEG_chipinfo, by ="GENENAME")
+CII_PF_otherOG <- inner_join(CII_set,PF_otherOG_direct_DEG_chipinfo, by ="GENENAME")
+CIII_PF_otherOG <- inner_join(CIII_set,PF_otherOG_direct_DEG_chipinfo, by ="GENENAME")
+```
+All are empty
+
+## 5.2 Runx2 target mito genes in SAG
+1) Target mito DEGs in SAG_OG3
+```{r}
+resp_SAG_OG3 <- inner_join(resp_set,SAG_OG3_direct_DEG_chipinfo, by ="GENENAME")
+oxph_SAG_OG3 <- inner_join(oxph_set,SAG_OG3_direct_DEG_chipinfo, by ="GENENAME")
+CI_SAG_OG3 <- inner_join(CI_set,SAG_OG3_direct_DEG_chipinfo, by ="GENENAME")
+CII_SAG_OG3 <- inner_join(CII_set,SAG_OG3_direct_DEG_chipinfo, by ="GENENAME")
+CIII_SAG_OG3 <- inner_join(CIII_set,SAG_OG3_direct_DEG_chipinfo, by ="GENENAME")
+```
+
+```{r,output }
+write.csv(oxph_SAG_OG3, file = "./OutputTable/oxph_SAG_OG3_Runx2ChIP.csv", row.names = FALSE)
+write.csv(CI_SAG_OG3, file = "./OutputTable/CI_SAG_OG3_Runx2ChIP.csv", row.names = FALSE)
+
+```
+
+
+2) Target mito DEGs in SAG_otherOG
+```{r,Target mito DEGs in SAG_otherOG}
+resp_SAG_otherOG <- inner_join(resp_set,SAG_otherOG_direct_DEG_chipinfo, by ="GENENAME")
+oxph_SAG_otherOG <- inner_join(oxph_set,SAG_otherOG_direct_DEG_chipinfo, by ="GENENAME")
+CI_SAG_otherOG <- inner_join(CI_set,SAG_otherOG_direct_DEG_chipinfo, by ="GENENAME")
+CII_SAG_otherOG <- inner_join(CII_set,SAG_otherOG_direct_DEG_chipinfo, by ="GENENAME")
+CIII_SAG_otherOG <- inner_join(CIII_set,SAG_otherOG_direct_DEG_chipinfo, by ="GENENAME")
+```
+
+
+# 6 Visualize target mito genes
+From the above analysis, we found `Ndufs5` is the direct target of Runx2 in SAG and PF, which is indespensable for complex_I formation and OXPHOS function of mitochondria.
+We then check expression of this genes in all tissues and genetic background.
+## 6.1 Load packages and data
+```{r, load packages and datasets 4}
+gc()
+rm(list=ls())
+library(Seurat)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(scCustomize)
+library(pheatmap)
+library(RColorBrewer)
+set.seed(12)
+theme_set(theme_bw())
+
+seu <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_OG_seurat_20240309.rds")
+```
+
+## 6.2 Plot Ndufs5 in different tissues and genetic background
+```{r, check expression of Ndufs5, fig.height=15, fig.width=20}
+DefaultAssay(seu) <- "MAGIC_SCT"
+FeaturePlot(seu, features = c("mt-Co1","mt-Atp6",
+                             "Ndufs5", "Neat1",
+                             "Runx2","Ibsp"),
+           cols = c("grey85",brewer.pal(9,"YlOrRd")),
+           ncol=2, pt.size = 0.1, split.by = "orig.ident", label=TRUE)+xlim(-7,7)+ylim(-7,7)
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_mito_Ndufs5.pdf", device = "pdf", width = 40, height = 30)
+```
+# X save image
+```{r}
+save.image(file="./SeuratObject/current.RData")
+```
+

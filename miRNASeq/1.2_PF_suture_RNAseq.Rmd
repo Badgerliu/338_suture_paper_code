@@ -1,0 +1,171 @@
+---
+title: "PF suture RNAseq in gene mode"
+author: "Huan Liu"
+date: "2024-02-18"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  echo = TRUE,
+  cache.lazy = FALSE)
+```
+Here we analyzed DEGs in PF suture RNA-seq results in gene mode.
+
+# 1 Package load
+```{r,load packages}
+library(sleuth)
+library(dplyr)
+set.seed(12)
+
+
+```
+# 2 Load data and generate metadata
+Currently, there are several folders in the root directory
+```{r, retrieve sample names}
+base_dir <-"./PF"
+sample_id <- dir(base_dir)
+sample_id
+```
+Obtain the pwd to kallisto outputs
+```{r, retrieve pwd for kallisto outputs}
+kal_dirs <- sapply(sample_id, function(id) file.path(base_dir, id))
+kal_dirs
+```
+
+Generate metadata table
+```{r,generate metadata table 1}
+design_matrix <- data.frame(
+  sample = c("D0_PF_1", "D0_PF_2", "D7_PF_1", "D7_PF_2"),
+  condition = c("D0", "D0", "D7", "D7"),
+  reps = c(1, 2, 1, 2)
+)
+design_matrix
+```
+
+```{r,generate metadata table 2}
+s2c <- dplyr::mutate(design_matrix, path = kal_dirs)
+print(s2c)
+```
+
+# 3 Prepare t2g
+Be aware of this step, do not use biomart downloaded t2g,if you use mm10 index.
+```{r, generate t2g for gene mapping}
+#mart <- biomaRt::useMart(biomart = "ENSEMBL_MART_ENSEMBL",
+#                         dataset = "mmusculus_gene_ensembl",
+#                         host = 'https://www.ensembl.org')
+#t2g_2 <- biomaRt::getBM(attributes = c("ensembl_transcript_id", "ensembl_gene_id",
+#                                     "external_gene_name"), mart = mart)
+t2g <- read.csv("./t2g_mm10.csv")
+```
+
+# 4 Sleuth process
+Again, here we use gene mode to prepare sleuth. However, if you care about transcript, turn off the gene_mode, and check the transcript first.
+```{r, generate sleuth object}
+so1 <- sleuth_prep(s2c, ~ condition, target_mapping = t2g, extra_bootstrap_summary = TRUE, gene_mode = TRUE, aggregation_column = 'ext_gene', control_condition = 'conditionD0')
+```
+Then the full model is fit with
+
+
+```{r,fit with full mode}
+so1 <- sleuth_fit(so1, ~condition, 'full')
+```
+
+What this has accomplished is to “smooth” the raw kallisto abundance estimates for each sample using a linear model with a parameter that represents the experimental condition (in this case D0 vs D3). To test for transcripts that are differential expressed between the conditions, sleuth performs a second fit to a “reduced” model that presumes abundances are equal in the two conditions. To identify differential expressed transcripts sleuth will then identify transcripts with a significantly better fit with the “full” model.
+
+The “reduced” model is fit with
+
+
+```{r,fit with reduced mode}
+so1 <- sleuth_fit(so1, ~1, 'reduced')
+```
+and the test is performed with
+```{r,test with reduced and full mode}
+so1 <- sleuth_lrt(so1, 'reduced', 'full')
+
+```
+
+In general, sleuth can utilize the likelihood ratio test with any pair of models that are nested, and other walkthroughs illustrate the power of such a framework for accounting for batch effects and more complex experimental designs.
+
+The models that have been fit can always be examined with the models() function.
+
+```{r}
+models(so1)
+```
+
+The results of the test can be examined with
+
+```{r, generate significant sleuth outputs}
+sleuth_table <- sleuth_results(so1, 'reduced:full', 'lrt', show_all = FALSE)
+sleuth_significant <- dplyr::filter(sleuth_table, qval <= 0.05)
+head(sleuth_significant, 20)
+```
+
+```{r, waldtest to generate DEGs}
+so1 <- sleuth_wt(so1,'conditionD7','full')
+results_table <- sleuth_results(so1, 'conditionD7', test_type = 'wt')
+sleuth_significant <- dplyr::filter(results_table, qval <= 0.05)
+head(sleuth_significant, 20)
+```
+
+The table shown above displays the top 20 significant genes with a (Benjamini-Hochberg multiple testing corrected) q-value <= 0.05.
+
+# 5 Gene expression plot
+```{r,gene expression plot for Egr1}
+plot_bootstrap(so1, "Egr1", units = "est_counts", color_by = "condition")
+
+```
+
+```{r,gene expression plot for Ibsp}
+plot_bootstrap(so1, "Ibsp", units = "est_counts", color_by = "condition") 
+
+```
+
+
+# 6 QC 
+QC with PCA and density
+```{r,PCA analysis}
+plot_pca(so1, color_by = 'condition')
+```
+Various quality control metrics can also be examined. The count distributions for each sample (grouped by condition) can be displayed using the plot_group_density command:
+```{r,density QC}
+plot_group_density(so1, use_filtered = TRUE, units = "est_counts",
+  trans = "log", grouping = setdiff(colnames(so1$sample_to_covariates),
+  "sample"), offset = 1)
+```
+
+# 7 Export matrix
+
+## 7.1 Export DEG matrix
+```{r, export DEG matrix with significance}
+write.csv(sleuth_significant, file="./PF_suture_RNAseq_sig.csv",row.names = FALSE)
+```
+
+##7.2 Export scaled_reads_per_base matrix for gene mode
+```{r, export scaled_reads_per_base matrix}
+sleuth_geneexp<-sleuth_to_matrix(so1,'obs_norm', 'scaled_reads_per_base')
+
+```
+
+```{r,export }
+sleuth_geneexp <- as.data.frame(sleuth_geneexp)
+
+sleuth_geneexp$target_id = row.names(sleuth_geneexp)
+```
+
+```{r, export sleuth expression matrix}
+write.csv(sleuth_geneexp, file="./PF_suture_RNAseq_exp.csv",row.names = FALSE)
+```
+
+##7.3 Cominbed DEG and TPM
+```{r,combine DEG with TPM}
+library(dplyr)
+sig_exp <- left_join(sleuth_significant,sleuth_geneexp, by = "target_id") 
+write.csv(sig_exp, file = "./PF_suture_RNAseq_sig_exp.csv", row.names = FALSE)
+```
+## X R session info
+```{r,R session info}
+sessionInfo()
+```

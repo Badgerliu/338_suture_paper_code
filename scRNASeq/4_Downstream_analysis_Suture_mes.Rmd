@@ -1,0 +1,3200 @@
+---
+title: "suture_mes_mito_MAGIC_plot"
+author: "Huan Liu"
+date: "2025-03-05"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  echo = TRUE,
+  cache.lazy = FALSE)
+```
+
+This is an analysis and ploting script for Figure 4, searching for the features of DEGs in OG3 among different genotypes, which revealed the most striking difference among genotypes were related with mitochondria resperation, and a potential target CDK8.
+"suture_mes_mito_MAGIC_harmony_20230329.rds" from MAGIC imputation was subjected for the downstream analysis in this script.
+Pay attention to the cluster method, we finally adopted, is "k-mean", detailed recored in "5.3 k-mean".
+
+# 1 Prepare data
+## 1.1 Load packages and data
+```{r, remove unwanted objects in the environment and load pacakges}
+
+gc()
+rm(list=ls())
+.libPaths(c("/home/liuhuan/rpackage/", "/usr/local/lib/R/site-library"))
+library(ggplot2)
+library(Seurat)
+library(SeuratObject)
+library(RColorBrewer)
+library(dplyr)
+library(magrittr)
+suture_mes_mito_MAGIC <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_20230329.rds")
+
+Idents(suture_mes_mito_MAGIC) <- c("SCT_snn_res.0.6")
+```
+
+Inspect the data by umap plot
+
+```{r, inspect suture_mes_mito_MAGIC}
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T)
+```
+
+
+
+We then check the distribution of mito genes.
+```{r, marker for cluster mito percent,fig.height=6, fig.width=8}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("percent.mt"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1, label=T)
+```
+We found even after the regression of the mito genes, we still can find the enrichment of mito genes in cluster 14 and cluster 15.  We removed them.
+```{r, subset seurat object}
+suture_mes_mito_MAGIC <- subset(suture_mes_mito_MAGIC, idents=c(0:13))
+```
+Check the distribution of mito percentage again.
+```{r, marker for cluster mito percent,fig.height=6, fig.width=10}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("percent.mt"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1,
+            label=T)
+```
+
+```{r, umap plot for cluster,fig.height=6, fig.width=8}
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T)
+
+```
+## 1.2 Marker genes identification
+Identification of marker genes
+refer to `https://github.com/satijalab/seurat/issues/2115` Perform DE using RNA rather than SCT
+
+```{r, generally find marker genes}
+Idents(suture_mes_mito_MAGIC) <- c("SCT_snn_res.0.6")
+
+DefaultAssay(suture_mes_mito_MAGIC) <- "RNA"
+suture_mes_mito_MAGIC <- NormalizeData(suture_mes_mito_MAGIC)
+all.genes <- rownames(suture_mes_mito_MAGIC)
+suture_mes_mito_MAGIC <- ScaleData(suture_mes_mito_MAGIC, features = all.genes)
+suture_mes_mito_MAGIC_markers <- FindAllMarkers(object = suture_mes_mito_MAGIC, only.pos = TRUE, 
+                               min.pct = 0.25, thresh.use = 0.25) #identify positive marker genes 
+top10 <- suture_mes_mito_MAGIC_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) # You may change n=10 to other number to get top_n genes as you wish.
+```
+
+```{r, output tables for marker genes}
+write.csv(suture_mes_mito_MAGIC_markers, file = "./OutputTable/suture_mes_mito_MAGIC_markers_20230328.csv", row.names = FALSE)
+write.csv(top10, file = "./OutputTable/suture_mes_mito_MAGIC_top10_markers_20230328.csv", row.names = FALSE)
+
+
+```
+
+Plot heatmap for marker genes
+```{r, heatmapplot, fig.width=10, fig.height=18 }
+
+DoHeatmap(suture_mes_mito_MAGIC, features = top10$gene)
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_markers_top10_20230328.pdf", device = "pdf",#adjust filename accordingly
+       width = 30, #adjust according to the display of output
+       height = 55, #adjust according to the display of output
+       units = "cm")
+
+```
+
+## 1.3 Marker genes plot
+Here, we will first plot marker genes 
+```{r, marker for cluster 0,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Sfrp2","Tac1",
+                                          "Scx","Igfbp3"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+
+```
+Thus, we name cluster 0 as ligament like cells (LIG)
+
+```{r, marker for cluster 1,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Postn","Mmp13","Npnt","Podnl1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With Mmp13 and Podnl1 highly enriched in osteogenic cluster, we name it as "OG1"
+
+```{r, marker for cluster 2,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Matn4","Cpz","Nppc","Fmod"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With highly enrichment of Matn4 and some overlap of Nppc, cluster2 must belong to outer menigeal population, making it as "MG1"
+
+
+```{r, marker for cluster 3,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Crabp2","Gsta4","Slc4a10","Fxyd5"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With highly enrichment of Crabp2 and Fxyd5, cluster 3 belongs to inner menigeal population, making it as "MG2".
+
+```{r, marker for cluster 4,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Crip1","Tnn","Npnt","Tnc"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With partially overlap of Npnt, Tnn and Tnc, we term this cluster as "OG2".
+
+```{r, marker for cluster 5,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Ppp1r10","Wsb1","Rasl11b","Irf1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With partial overlap with Matn4, we term this cluster as "MG3".
+
+
+```{r, marker for cluster 6,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Stmn1","Hmgb2","Top2a","Mki67"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+With specific enrichment of Mki67 and Top2a, which is highly associated with proliferation, we term this as "PO".
+
+```{r, marker for cluster 7,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Ccl11","Il6","Igf1","Col4a1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With highly overlap expression pattern of Igf1, we term this cluster as "MG4".
+
+```{r, marker for cluster 8,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Bglap","Ibsp","Dmp1","Ifitm5"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With a relatively terminal differentiation marker for osteoblasts, Dmp1 and Ifitm5, we term this cluster as "OG3".
+
+```{r, marker for cluster 9,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Pi16","Ly6a","Clc3b"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With Pi16 and Ly6a, markers for ectocranial population, we term this cluster as "EC".
+
+```{r, marker for cluster 10,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Col2a1","Mia","Mmp9","Acan"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+This cluster were termed as "Chondro" for chondrogenesis.
+
+```{r, marker for cluster 11,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Rgs5","Procr","Myh11","Gm13889"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+This cluster were termed as "Peri" for pericytes.
+
+```{r, marker for cluster 5,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Tnmd","Matn4",
+                                          "Scx","Cilp2"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+## 1.4 Celltype 
+```{r, rename cluster}
+new.cluster.ids <- c("LIG", #Cluster 0 
+                     "OG1", #Cluster 1 
+                     "OG2", #Cluster 2 
+                     "MG1", #Cluster 3 
+                     "MG3", #Cluster 4 
+                     "OG0", #Cluster 5 
+                     "MG2", #Cluster 6 
+                     "PO", #Cluster 7 
+                     "MG5", #Cluster 8 
+                     "MG4", #Cluster 9 
+                     "OG3", #Cluster 10 
+                     "EC", #Cluster 11
+                     "Chondro", #Cluster 12
+                     "Peri", #Cluster 13
+                     "removed", #Cluster 14 with high mito
+                     "removed" #Cluster 15 with high mito
+                     )
+Idents(suture_mes_mito_MAGIC) <- c("SCT_snn_res.0.6")
+suture_mes_mito_MAGIC@meta.data$seurat_clusters <-suture_mes_mito_MAGIC@meta.data$SCT_snn_res.0.6
+suture_mes_mito_MAGIC@meta.data$celltype<- suture_mes_mito_MAGIC@meta.data$seurat_clusters
+levels(suture_mes_mito_MAGIC@meta.data$celltype) <- new.cluster.ids
+```
+
+```{r,draft plot for celltype}
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T, group.by = "celltype")
+```
+
+```{r, initial plots after celltype}
+Idents(suture_mes_mito_MAGIC) <- c("celltype")
+#group_by_cluster
+plot1 = DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(suture_mes_mito_MAGIC, reduction = "umap", group.by = "celltype")
+plot3 = DimPlot(suture_mes_mito_MAGIC, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_umap_celltype.png", plot = plotc, width = 10, height = 5)
+plot3
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_umap_celltype_split.png", plot = plot3, width = 20, height = 5) # You may set the parameters, especially the "width". Usually each plot will take about 5.5 unit.
+
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T)
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", group.by = "celltype")
+
+```
+
+```{r, output integrated data}
+saveRDS(suture_mes_mito_MAGIC, file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed_20250420.rds")
+```
+
+
+
+## 2 Dotplot for celltype
+Load data and packages
+```{r load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+.libPaths(c("/home/liuhuan/rpackage/", "/usr/local/lib/R/site-library"))
+library(ggplot2)
+library(Seurat)
+library(SeuratObject)
+
+suture_mes_mito_MAGIC <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed_20250420.rds")
+
+
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+#library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(scCustomize)
+library(pheatmap)
+library(RColorBrewer)
+set.seed(12)
+theme_set(theme_bw())
+
+
+
+
+```
+
+
+```{r, check the order of celltype for display}
+levels(suture_mes_mito_MAGIC@meta.data$celltype)
+```
+
+
+We want to reorder the celltype, to make plot more apealing.
+```{r, re-order celltype}
+suture_mes_mito_MAGIC$celltype <- factor(suture_mes_mito_MAGIC$celltype, levels = c("Peri","Chondro","EC","LIG","PO","OG0","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4","MG5","removed")) 
+levels(suture_mes_mito_MAGIC$celltype)
+```
+
+```{r}
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T)
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_celltype_UMAP_labeled.pdf", device = "pdf", width = 4, height = 3)
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", group.by = "celltype")
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_celltype_UMAP.pdf", device = "pdf", width = 4, height = 3)
+```
+
+```{r,dotplot for cell types,fig.height=4, fig.width=12}
+genes_to_check_mes <- c("Rgs5","Procr","Myh11","Gm13889",  #Peri
+                        "Col2a1","Mia","Mmp9","Acan", #Chondro
+                        "Pi16","Ly6a","Clc3b", #EC
+                        "Sfrp2","Tac1", "Scx","Igfbp3",#LIG
+                        "Stmn1","Hmgb2","Top2a","Mki67", #PO
+                        "Postn","Mmp13","Npnt","Podnl1", #OG1
+                        "Crip1","Tnn","Npnt","Tnc", #OG2
+                        "Bglap","Ibsp","Dmp1","Ifitm5", #OG3
+                        "Matn4","Cpz","Nppc","Fmod", #MG1
+                        "Crabp2","Gsta4","Slc4a10","Fxyd5",#MG2
+                        "Ppp1r10","Wsb1","Rasl11b","Irf1", #MG3
+                        "Ccl11","Il6","Igf1","Col4a1" #MG4
+                        )
+
+
+DotPlot(suture_mes_mito_MAGIC, features = unique(genes_to_check_mes),group.by = "celltype")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_harmony_dotplot_celltype_0430.pdf",width = 15,height = 6)
+
+```
+
+
+
+```{r,dotplot for cell types blue red color,fig.height=4, fig.width=12}
+DotPlot(suture_mes_mito_MAGIC, features = unique(genes_to_check_mes),
+        cols = c("lightgrey","red"),col.min = 0, col.max = 3,
+        group.by = "celltype")+
+  RotatedAxis()+
+  scale_x_discrete("")+
+  scale_y_discrete("")
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_harmony_dotplot_celltype_red_0430.pdf",width = 15,height = 6)
+
+
+```
+```{r, dotplot with different celltype, green and yellow,fig.height=6, fig.width=15}
+Idents(suture_mes_mito_MAGIC) <- suture_mes_mito_MAGIC$celltype
+DotPlot(suture_mes_mito_MAGIC, features=unique(genes_to_check_mes))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_harmony_dotplot_celltype_green_0430.pdf",width = 15,height = 6)
+```
+```{r, split by group}
+suture_mes_mito_MAGIC_object_list <- SplitObject(suture_mes_mito_MAGIC, split.by = "group")
+suture_mes_mito_MAGIC_SAG <- suture_mes_mito_MAGIC_object_list$SAG
+suture_mes_mito_MAGIC_PF <- suture_mes_mito_MAGIC_object_list$PF
+```
+
+
+```{r}
+saveRDS(suture_mes_mito_MAGIC_SAG, file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed_SAG_0430.rds")
+
+saveRDS(suture_mes_mito_MAGIC_PF, file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed_PF_0430.rds")
+```
+
+```{r}
+gc()
+rm(list=ls())
+```
+
+# 3 Cell proportion
+## 3.1 PF
+### 3.1.1 load package
+```{r load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+.libPaths(c("/home/liuhuan/rpackage/", "/usr/local/lib/R/site-library"))
+library(ggplot2)
+library(Seurat)
+library(SeuratObject)
+
+suture_mes_mito_MAGIC_PF <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed_PF_0430.rds")
+
+
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(slingshot)
+library(magrittr)
+library(dplyr)
+#library(tidyverse)
+library(cowplot)
+library(gridExtra)
+library(viridis)
+library(readr)
+library(Hmisc)
+library(ggpubr)
+library(rsample)
+library(tidymodels)
+library(scales)
+library(scCustomize)
+library(pheatmap)
+library(RColorBrewer)
+set.seed(12)
+theme_set(theme_bw())
+
+
+```
+
+```{r, change levels}
+suture_mes_mito_MAGIC_PF$celltype <- factor(suture_mes_mito_MAGIC_PF$celltype, levels = c("Peri","Chondro","EC","LIG","PO","OG0","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4","MG5","removed")) 
+levels(suture_mes_mito_MAGIC_PF$celltype)
+```
+
+```{r}
+DimPlot(suture_mes_mito_MAGIC_PF, reduction = "umap", label = T)
+DimPlot(suture_mes_mito_MAGIC_PF, reduction = "umap", group.by = "celltype")
+```
+
+
+
+
+```{r,prepare function for cell percentage}
+# --- Ensure necessary libraries are loaded ---
+# install.packages(c("Seurat", "ggplot2", "data.table", "dplyr", "forcats", "reshape2")) # If needed, uncomment and run to install
+library(Seurat)
+library(ggplot2)
+library(data.table)
+library(dplyr)
+library(forcats)
+library(reshape2) # melt function is in this package (although data.table::melt also works)
+
+#' @title Calculate and Plot Cell Proportions from Seurat Object Metadata
+#'
+#' @description This function takes a Seurat object, extracts metadata, calculates cell counts
+#'              and percentages grouped by 'orig.ident' and a specified metadata column,
+#'              saves the results to CSV files, and generates several summary plots.
+#'
+#' @param seurat_obj A Seurat object.
+#' @param group_by_metadata A string specifying the metadata column name to group cells by (e.g., "celltype", "seurat_clusters").
+#' @param output_prefix A string used as a prefix for all output file names. Helps in organizing outputs.
+#' @param output_dir_table Path to the directory where CSV tables will be saved. Defaults to "./OutputTable".
+#' @param output_dir_figure Path to the directory where PDF plots will be saved. Defaults to "./OutputFigure".
+#' @param relevel_vector An optional character vector specifying the desired order of levels for the `group_by_metadata` factor on the plot's x-axis. If NULL (default), the default factor ordering is used.
+#'
+#' @return Invisibly returns the long-format data table containing percentages (`split_count_mut_melt`).
+#'
+#' @importFrom Seurat Idents<-
+#' @import data.table
+#' @import dplyr
+#' @import ggplot2
+#' @import forcats
+#' @import reshape2
+#'
+#' @examples
+#' \dontrun{
+#' # Assume you have a Seurat object named 'my_seurat_object'
+#' # and you want to group by 'celltype' metadata
+#' calculate_and_plot_proportions(
+#'   seurat_obj = my_seurat_object,
+#'   group_by_metadata = "celltype",
+#'   output_prefix = "my_analysis_celltype",
+#'   relevel_vector = c("TypeA", "TypeC", "TypeB") # Optional ordering
+#' )
+#'
+#' # Group by 'seurat_clusters'
+#' calculate_and_plot_proportions(
+#'   seurat_obj = my_seurat_object,
+#'   group_by_metadata = "seurat_clusters",
+#'   output_prefix = "my_analysis_clusters"
+#' )
+#' }
+
+calculate_and_plot_proportions <- function(seurat_obj,
+                                           group_by_metadata,
+                                           output_prefix,
+                                           output_dir_table = "./OutputTable",
+                                           output_dir_figure = "./OutputFigure",
+                                           relevel_vector = NULL) {
+
+  # --- Parameter validation ---
+  if (!inherits(seurat_obj, "Seurat")) {
+    stop("Input 'seurat_obj' must be a Seurat object.")
+  }
+  if (!is.character(group_by_metadata) || length(group_by_metadata) != 1) {
+    stop("'group_by_metadata' must be a single string.")
+  }
+  if (!group_by_metadata %in% colnames(seurat_obj@meta.data)) {
+    stop(paste("Metadata column", shQuote(group_by_metadata), "not found in the Seurat object."))
+  }
+  if (!is.character(output_prefix) || length(output_prefix) != 1) {
+    stop("'output_prefix' must be a single string.")
+  }
+  if (!dir.exists(output_dir_table)) {
+      message("Creating output table directory: ", output_dir_table)
+      dir.create(output_dir_table, recursive = TRUE)
+  }
+   if (!dir.exists(output_dir_figure)) {
+      message("Creating output figure directory: ", output_dir_figure)
+      dir.create(output_dir_figure, recursive = TRUE)
+  }
+
+
+  # --- 1. Extract and calculate cell counts ---
+  message("Step 1: Calculating cell counts...")
+  # Set Idents (although not directly used for counting in this specific workflow, but consistent with original code)
+  Idents(seurat_obj) <- seurat_obj[[group_by_metadata, drop = TRUE]]
+
+  ## Extract metadata
+  md <- as.data.table(seurat_obj@meta.data)
+
+  ## Calculate cell counts by "orig.ident" and specified metadata column
+  split_count_long <- md[, .N, by = c("orig.ident", group_by_metadata)]
+  setnames(split_count_long, "N", "Number") # Rename count column
+
+  ## Convert to wide format (dcast)
+  # Build dcast formula
+  formula_dcast <- as.formula(paste("orig.ident ~", group_by_metadata))
+  split_count_wide <- dcast(split_count_long, formula_dcast, value.var = "Number", fill = 0) # fill=0 replaces NA
+
+  ## Convert back to long format (melt) - for plotting and saving
+  split_count_melt <- melt(split_count_wide,
+                           id.vars = "orig.ident",
+                           variable.name = group_by_metadata, # Use input parameter
+                           value.name = "Number")
+  # Ensure the group_by_metadata column after melt is factor type
+  split_count_melt[[group_by_metadata]] <- as.factor(split_count_melt[[group_by_metadata]])
+
+
+  ## Save original counts (long format)
+  count_filename_csv <- file.path(output_dir_table, paste0(output_prefix, "_cell_number_", group_by_metadata, ".csv"))
+  message("Saving raw counts (long format) to: ", count_filename_csv)
+  fwrite(split_count_melt, file = count_filename_csv, row.names = FALSE)
+
+  # --- 2. Plot proportional chart of original counts ---
+  message("Step 2: Generating count proportion plot...")
+
+  # Factor level reordering (if provided)
+  if (!is.null(relevel_vector)) {
+    message("Releveling factor: ", group_by_metadata)
+    # Check if all provided levels are in the data
+    current_levels <- levels(split_count_melt[[group_by_metadata]])
+    if (!all(relevel_vector %in% current_levels)) {
+        warning("Some levels in 'relevel_vector' are not present in the data for column '", group_by_metadata, "'. Proceeding with available levels.")
+        relevel_vector <- intersect(relevel_vector, current_levels)
+    }
+     if (length(relevel_vector) > 0) {
+       split_count_melt[[group_by_metadata]] <- fct_relevel(split_count_melt[[group_by_metadata]], relevel_vector)
+     } else {
+        warning("No valid levels remaining in 'relevel_vector' after checking against data. Skipping releveling.")
+     }
+  }
+
+  p1 <- ggplot(split_count_melt, aes(fill = orig.ident, x = .data[[group_by_metadata]], y = Number)) +
+    geom_bar(position = "fill", stat = "identity") +
+    ggtitle(paste("Proportion of cells per", group_by_metadata, "across identities (raw counts)")) +
+    xlab(group_by_metadata) +
+    ylab("Proportion of cells") +
+    theme_minimal(base_size = 12) + # Use a slightly cleaner theme
+    theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), # Rotate X-axis labels to prevent overlap
+        legend.position = "bottom" # Place legend at bottom
+        )
+
+  plot_filename_p1 <- file.path(output_dir_figure, paste0(output_prefix, "_Percentage_cell_in_each_", group_by_metadata, "_unnormalized.pdf"))
+  message("Saving count proportion plot to: ", plot_filename_p1)
+  ggsave(plot_filename_p1, plot = p1, height = 5, width = max(7.5, length(levels(split_count_melt[[group_by_metadata]]))*0.5 + 2 )) # Dynamic width
+
+  # --- 3. Calculate percentages within each orig.ident ---
+  message("Step 3: Calculating percentages within each orig.ident...")
+
+  # Use data.table chaining operations to calculate percentages more efficiently
+  # Start from long format counts
+  split_count_long[, total_per_ident := sum(Number), by = orig.ident] # Calculate total for each orig.ident
+  split_count_long[, Percentage := fifelse(total_per_ident > 0, (Number / total_per_ident) * 100, 0), by = orig.ident] # Calculate percentage, handle cases where total is 0
+
+  # Extract long format percentage data for saving and plotting
+  split_count_mut_melt <- split_count_long[, .(orig.ident, get(group_by_metadata), Percentage)]
+  setnames(split_count_mut_melt, "V2", group_by_metadata) # Rename column name generated by get()
+  # Ensure factor type and order are consistent with previous
+  split_count_mut_melt[[group_by_metadata]] <- factor(split_count_mut_melt[[group_by_metadata]], levels = levels(split_count_melt[[group_by_metadata]]))
+
+
+  # Create wide format percentage data for saving
+  formula_dcast_perc <- as.formula(paste("orig.ident ~", group_by_metadata))
+  split_count_mut_wide <- dcast(split_count_mut_melt, formula_dcast_perc, value.var = "Percentage", fill = 0)
+
+  ## Save wide format percentage table
+  perc_wide_filename_csv <- file.path(output_dir_table, paste0(output_prefix, "_cell_percentage_", group_by_metadata, "_unmelt.csv"))
+  message("Saving percentages (wide format) to: ", perc_wide_filename_csv)
+  fwrite(split_count_mut_wide, file = perc_wide_filename_csv, row.names = FALSE)
+
+  ## Save long format percentage table
+  perc_long_filename_csv <- file.path(output_dir_table, paste0(output_prefix, "_cell_percentage_", group_by_metadata, ".csv"))
+  message("Saving percentages (long format) to: ", perc_long_filename_csv)
+  fwrite(split_count_mut_melt, file = perc_long_filename_csv, row.names = FALSE)
+
+  # --- 4. Plot percentage charts ---
+  message("Step 4: Generating percentage plots...")
+
+  ## 4a. Percentage stacked bar chart (filled by group, showing proportions) - Note this will look the same as p1 visually
+  p2 <- ggplot(split_count_mut_melt, aes(fill = orig.ident, x = .data[[group_by_metadata]], y = Percentage)) +
+    geom_bar(position = "fill", stat = "identity") + # position="fill" will recalculate proportions
+    ggtitle(paste("Proportion of cells per", group_by_metadata, "across identities (normalized proportions)")) +
+    xlab(group_by_metadata) +
+    ylab("Proportion of cells") +
+    theme_minimal(base_size = 12) +
+    theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.position = "bottom"
+        )
+
+  plot_filename_p2 <- file.path(output_dir_figure, paste0(output_prefix, "_Percentage_cell_in_each_", group_by_metadata, "_normalized_fill.pdf"))
+  message("Saving percentage proportion plot (fill) to: ", plot_filename_p2)
+  ggsave(plot_filename_p2, plot = p2, height = 5, width = max(7.5, length(levels(split_count_mut_melt[[group_by_metadata]]))*0.5 + 2 ))
+
+  ## 4b. Percentage stacked bar chart (directly showing calculated percentages)
+  # Using geom_col equivalent to geom_bar(stat="identity")
+  p3 <- ggplot(split_count_mut_melt, aes(x = .data[[group_by_metadata]], y = Percentage, fill = orig.ident)) +
+    geom_col(color = "black") + # Add black borders
+    ggtitle(paste("Percentage of cells within each", group_by_metadata)) +
+    xlab(group_by_metadata) +
+    ylab("Percentage (%)") +
+    theme_bw(base_size = 12) +
+    theme(
+        panel.grid = element_blank(), # Remove background grid lines
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.position = "bottom"
+        )
+
+  plot_filename_p3 <- file.path(output_dir_figure, paste0(output_prefix, "_Percentage_cell_in_each_", group_by_metadata, "_normalized_stack.pdf"))
+  message("Saving percentage stacked plot to: ", plot_filename_p3)
+  ggsave(plot_filename_p3, plot = p3, height = 5, width = max(7.5, length(levels(split_count_mut_melt[[group_by_metadata]]))*0.5 + 2 ))
+
+
+  ## 4c. Percentage side-by-side bar chart (Dodge)
+  p4 <- ggplot(split_count_mut_melt, aes(x = .data[[group_by_metadata]], y = Percentage, fill = orig.ident)) +
+    geom_col(color = "black", position = position_dodge(preserve = "single")) + # Use position_dodge and preserve single bar positions
+    ggtitle(paste("Percentage of cells within each", group_by_metadata)) +
+    xlab(group_by_metadata) +
+    ylab("Percentage (%)") +
+    theme_bw(base_size = 12) +
+    theme(
+        panel.grid = element_blank(),
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.position = "bottom"
+        )
+
+  plot_filename_p4 <- file.path(output_dir_figure, paste0(output_prefix, "_Percentage_cell_in_each_", group_by_metadata, "_normalized_dodge.pdf"))
+  message("Saving percentage dodged plot to: ", plot_filename_p4)
+  # Dodge plots usually need wider space
+  ggsave(plot_filename_p4, plot = p4, height = 5, width = max(8, length(levels(split_count_mut_melt[[group_by_metadata]])) * length(unique(split_count_mut_melt$orig.ident)) * 0.2 + 3))
+
+  message("Function finished successfully!")
+
+  # Return long format percentage data frame for continued use in R environment
+  invisible(split_count_mut_melt)
+}
+
+# --- How to use ---
+# Assume your Seurat object is called suture_mes_mito_MAGIC_PF
+# and you want to group by "celltype"
+
+# Example usage 1: Basic usage
+# calculate_and_plot_proportions(
+#   seurat_obj = suture_mes_mito_MAGIC_PF,
+#   group_by_metadata = "celltype",
+#   output_prefix = "suture_mes_mito_MAGIC_PF_harmony_celltype" # Provide a filename prefix
+# )
+
+# Example usage 2: Specify output directories and factor ordering
+# my_celltype_order <- c("Peri","Chondro","EC","LIG","PO","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4") # Define your order
+# calculate_and_plot_proportions(
+#   seurat_obj = suture_mes_mito_MAGIC_PF,
+#   group_by_metadata = "celltype",
+#   output_prefix = "suture_mes_mito_MAGIC_PF_harmony_celltype_ordered",
+#   output_dir_table = "./CustomTables",  # Custom table output directory
+#   output_dir_figure = "./CustomFigures", # Custom figure output directory
+#   relevel_vector = my_celltype_order       # Pass in ordering vector
+# )
+
+# Example usage 3: Group by different metadata, such as 'seurat_clusters'
+# calculate_and_plot_proportions(
+#   seurat_obj = suture_mes_mito_MAGIC_PF,
+#   group_by_metadata = "seurat_clusters",
+#   output_prefix = "suture_mes_mito_MAGIC_PF_harmony_clusters"
+# )
+```
+```{r,DPA-based percentage comparison}
+# --- Ensure necessary libraries are loaded ---
+# install.packages(c("Seurat", "data.table", "dplyr", "tibble")) # If needed
+library(Seurat)
+library(data.table)
+library(dplyr)
+library(tibble) # For remove_rownames and column_to_rownames
+
+#' @title Perform Differential Cell Proportion Analysis
+#'
+#' @description This function automates the process of calculating cell counts per group
+#'              and condition, performing pairwise differential proportion tests using
+#'              functions from an external script (e.g., diffprop_functions.R), and
+#'              saving the results across a range of error probabilities.
+#'
+#' @param seurat_obj A Seurat object.
+#' @param group_by_metadata A string specifying the metadata column name to group cells by (e.g., "celltype"). This column defines the populations whose proportions are compared.
+#' @param comparisons A list of character vectors. Each vector must have length 2,
+#'                   in the format `c("condition_treatment", "condition_control")`.
+#'                   These values must correspond to unique values in the 'orig.ident'
+#'                   column of the Seurat object's metadata.
+#'                   Example: `list(c("DM_PF", "WT_PF"), c("KO_PF", "WT_PF"))`.
+#' @param error_probabilities A numeric vector of error probabilities (p) to test in `generateNull`.
+#'                            Defaults to `c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05)`.
+#' @param n_iterations An integer specifying the number of iterations ('n') for `generateNull`.
+#'                     Defaults to 100000.
+#' @param diffprop_script_path The file path to the R script containing the `generateNull`
+#'                             and `two.class.test` functions. Defaults to "diffprop_functions.R".
+#' @param output_prefix A string used as a prefix for all output file names.
+#' @param output_dir_table Path to the directory where CSV tables will be saved. Defaults to "./OutputTable".
+#'
+#' @return A list containing the results tables (p-values) for each comparison across the specified error probabilities. Each element in the list corresponds to a comparison.
+#'
+#' @importFrom Seurat Idents<-
+#' @import data.table
+#' @import dplyr
+#' @import tibble
+#'
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' # Assume 'suture_mes_mito_MAGIC_PF' is your Seurat object
+#' # Assume 'diffprop_functions.R' is in your working directory or accessible path
+#'
+#' # Define the comparisons you want to make
+#' my_comparisons <- list(
+#'   c("DM_PF", "WT_PF"),
+#'   c("KO_PF", "WT_PF"),
+#'   c("Runx2_PF", "WT_PF"),
+#'   c("DM_PF", "Runx2_PF"),
+#'   c("KO_PF", "Runx2_PF"),
+#'   c("DM_PF", "KO_PF")
+#' )
+#'
+#' # Run the analysis
+#' results_list <- run_differential_proportion_analysis(
+#'   seurat_obj = suture_mes_mito_MAGIC_PF,
+#'   group_by_metadata = "celltype",
+#'   comparisons = my_comparisons,
+#'   output_prefix = "suture_mes_mito_MAGIC_PF_DPA"
+#' )
+#'
+#' # Access results for a specific comparison, e.g., DM_PF vs WT_PF
+#' # dm_vs_wt_results <- results_list[["DM_PF_vs_WT_PF"]]
+#' # print(dm_vs_wt_results)
+#' }
+run_differential_proportion_analysis <- function(
+    seurat_obj,
+    group_by_metadata,
+    comparisons,
+    error_probabilities = c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05),
+    n_iterations = 100000,
+    diffprop_script_path = "diffprop_functions.R",
+    output_prefix,
+    output_dir_table = "./OutputTable"
+) {
+
+  # --- Input Validation ---
+  if (!inherits(seurat_obj, "Seurat")) {
+    stop("Input 'seurat_obj' must be a Seurat object.")
+  }
+  if (!is.character(group_by_metadata) || length(group_by_metadata) != 1) {
+    stop("'group_by_metadata' must be a single string.")
+  }
+  if (!group_by_metadata %in% colnames(seurat_obj@meta.data)) {
+    stop("Metadata column ", shQuote(group_by_metadata), " not found in the Seurat object.")
+  }
+  if (!is.list(comparisons) || length(comparisons) == 0) {
+      stop("'comparisons' must be a non-empty list.")
+  }
+  if (!all(sapply(comparisons, function(x) is.character(x) && length(x) == 2))) {
+      stop("Each element in 'comparisons' must be a character vector of length 2: c('treatment', 'control').")
+  }
+  all_conditions <- unique(unlist(comparisons))
+  if (!all(all_conditions %in% unique(seurat_obj$orig.ident))) {
+      missing_cond <- setdiff(all_conditions, unique(seurat_obj$orig.ident))
+      stop("The following conditions specified in 'comparisons' are not found in seurat_obj$orig.ident: ",
+           paste(missing_cond, collapse=", "))
+  }
+  if (!file.exists(diffprop_script_path)) {
+    stop("Differential proportion functions script not found at: ", diffprop_script_path)
+  }
+   if (!dir.exists(output_dir_table)) {
+      message("Creating output table directory: ", output_dir_table)
+      dir.create(output_dir_table, recursive = TRUE)
+  }
+  if (!is.character(output_prefix) || length(output_prefix) != 1) {
+    stop("'output_prefix' must be a single string.")
+  }
+
+
+  # --- 1. Source the differential proportion functions ---
+  message("Sourcing functions from: ", diffprop_script_path)
+  source(diffprop_script_path)
+  # Check if functions are loaded (optional but good practice)
+  if (!exists("generateNull") || !exists("two.class.test")) {
+      stop("Functions 'generateNull' and/or 'two.class.test' not found after sourcing the script.")
+  }
+
+
+  # --- 2. Prepare the observed counts matrix ---
+  message("Preparing observed counts matrix...")
+  # Set Idents (consistent with original code, though maybe not strictly needed for count calculation)
+  Idents(seurat_obj) <- seurat_obj[[group_by_metadata, drop = TRUE]]
+
+  ## Extract metadata
+  md <- as.data.table(seurat_obj@meta.data)
+
+  ## Count cells per unique combination of "orig.ident" and the grouping metadata
+  counts_long <- md[, .N, by = c("orig.ident", group_by_metadata)]
+
+  ## Create wide format matrix: orig.ident as rows, group_by_metadata as columns
+  formula_dcast <- as.formula(paste("orig.ident ~", group_by_metadata))
+  obs.counts.df <- dcast(counts_long, formula_dcast, value.var = "N", fill = 0) # Use fill=0 for NAs
+
+  # Convert to matrix with orig.ident as rownames
+  obs.counts <- obs.counts.df %>%
+    tibble::remove_rownames() %>%
+    tibble::column_to_rownames(var = "orig.ident") %>%
+    as.matrix()
+
+  ## Save the counts matrix
+  count_filename <- file.path(output_dir_table, paste0(output_prefix, "_observed_counts_matrix.csv"))
+  message("Saving observed counts matrix to: ", count_filename)
+  write.csv(obs.counts, file = count_filename, row.names = TRUE)
+
+
+  # --- 3. Run Differential Proportion Analysis ---
+  message("Running Differential Proportion Analysis for ", length(comparisons), " comparisons across ", length(error_probabilities), " error probabilities...")
+
+  # Initialize a list to store results for each comparison
+  results_list <- vector("list", length(comparisons))
+  comparison_names <- sapply(comparisons, function(x) paste0(x[1], "_vs_", x[2]))
+  names(results_list) <- comparison_names
+
+  # Pre-allocate result tables within the list
+  for (comp_name in comparison_names) {
+      results_list[[comp_name]] <- matrix(NA,
+                                          nrow = length(error_probabilities),
+                                          ncol = ncol(obs.counts), # Assuming two.class.test returns p-values for each group
+                                          dimnames = list(as.character(error_probabilities), colnames(obs.counts)))
+  }
+
+
+  ## Loop through each error probability
+  for (i in seq_along(error_probabilities)) {
+    err_prob <- error_probabilities[i]
+    message("  Generating null distribution for p = ", err_prob, " (", i, "/", length(error_probabilities), ")")
+    # Generate the null distribution once per error probability
+    tip.exp <- generateNull(obs.counts, n = n_iterations, p = err_prob)
+
+    ## Loop through each specified comparison
+    for (j in seq_along(comparisons)) {
+      comp <- comparisons[[j]]
+      comp_name <- comparison_names[j]
+      cond_treatment <- comp[1]
+      cond_control <- comp[2]
+
+      message("    Testing: ", cond_treatment, " vs ", cond_control)
+      # Run the two-class test
+      res.1 <- tryCatch({
+           two.class.test(obs.counts, tip.exp,
+                         cond.control = cond_control,
+                         cond.treatment = cond_treatment,
+                         to.plot = FALSE)
+      }, error = function(e) {
+          warning("Error during two.class.test for ", comp_name, " at p=", err_prob, ": ", e$message)
+          # Return a vector of NAs matching expected output dimension
+          rep(NA_real_, ncol(obs.counts))
+      })
+
+      # Check if the result has the expected length
+      if(length(res.1) == ncol(obs.counts)) {
+          # Store the results in the pre-allocated matrix
+          results_list[[comp_name]][as.character(err_prob), ] <- res.1
+      } else {
+          warning("Unexpected result length from two.class.test for ", comp_name, " at p=", err_prob, ". Expected ", ncol(obs.counts), " values, got ", length(res.1), ". Storing NAs.")
+           results_list[[comp_name]][as.character(err_prob), ] <- rep(NA_real_, ncol(obs.counts))
+      }
+    } # End loop comparisons
+  } # End loop error_probabilities
+
+
+  # --- 4. Save Results Tables ---
+  message("Saving results tables...")
+  for (comp_name in names(results_list)) {
+    result_filename <- file.path(output_dir_table, paste0(output_prefix, "_DPA_results_", comp_name, ".csv"))
+    message("  Saving: ", result_filename)
+    # write.csv expects a data frame usually, ensure matrix is handled correctly
+    write.csv(results_list[[comp_name]], file = result_filename, row.names = TRUE)
+  }
+
+  message("Differential proportion analysis finished successfully!")
+
+  # Return the list of results tables
+  invisible(results_list)
+}
+```
+
+
+```{r, plot for PF }
+my_celltype_order <- c("Peri","Chondro","EC","LIG","PO","OG0","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4") # Define your order
+calculate_and_plot_proportions(
+   seurat_obj = suture_mes_mito_MAGIC_PF,
+   group_by_metadata = "celltype",
+   output_prefix = "suture_mes_mito_MAGIC_PF_harmony_celltype_ordered",
+   output_dir_table = "./OutputTable",  # Custom table output directory
+   output_dir_figure = "./OutputFigure", # Custom figure output directory
+   relevel_vector = my_celltype_order       # Pass in ordering vector
+ )
+```
+
+### 3.1.2 DPA approach
+
+```{r, source functions for DPA assay}
+source("diffprop_functions.R")
+```
+
+```{r,define comparison}
+my_comparisons <- list(
+  c("DM_PF", "WT_PF"),
+  c("KO_PF", "WT_PF"),
+  c("Runx2_PF", "WT_PF"),
+  c("DM_PF", "Runx2_PF"),
+  c("KO_PF", "Runx2_PF"),
+  c("DM_PF", "KO_PF")
+)
+```
+
+```{r}
+# Compare Seurat object is suture_mes_mito_MAGIC_PF
+dpa_results <- run_differential_proportion_analysis(
+  seurat_obj = suture_mes_mito_MAGIC_PF,
+  group_by_metadata = "celltype",  # Or other metadata like "seurat_clusters"
+  comparisons = my_comparisons,
+  output_prefix = "suture_mes_mito_MAGIC_PF_celltype_DPA_0430",
+    output_dir_table = "./OutputTable"
+)
+```
+
+### 3.1.3 Plot OG3
+```{r}
+# --- 1. Load the data ---
+# Make sure the path to your file is correct
+file_path <- "./OutputTable/suture_mes_mito_MAGIC_PF_harmony_celltype_ordered_cell_percentage_celltype.csv"
+
+# Check if file exists before trying to read
+if (!file.exists(file_path)) {
+  stop("CSV file not found at: ", file_path)
+}
+
+percentage_data <- fread(file_path)
+
+# Check the column names to be sure
+print(colnames(percentage_data))
+# Expected columns: "orig.ident", "celltype", "Percentage" (or similar)
+# Adjust the code below if your column names are different.
+
+# --- 2. Filter for OG3 celltype ---
+# Using data.table syntax
+og3_percentage_data <- percentage_data[celltype == "OG3"]
+
+
+
+# --- 3. Create the bar chart for OG3 percentages ---
+# Define output directory and prefix if needed for saving
+output_dir_figure = "./OutputFigure" # Or your preferred directory
+output_prefix = "suture_mes_mito_MAGIC_PF_harmony_OG3_only"
+
+if (!dir.exists(output_dir_figure)) {
+  dir.create(output_dir_figure, recursive = TRUE)
+}
+
+
+# Create the plot
+# Using geom_col is appropriate here as 'Percentage' is the value to plot directly
+p_og3_barplot <- ggplot(og3_percentage_data, aes(x = orig.ident, y = Percentage, fill = orig.ident)) +
+  geom_col(color = "black", position = position_dodge()) + # Use dodge if you potentially had multiple bars per x category, though not strictly needed here. geom_col() without dodge is fine too.
+  # geom_col(color = "black") + # Simpler version if dodging isn't needed
+  ggtitle("Percentage of OG3 Cells within each Genotype") + # Title clarifying the meaning
+  xlab("Genotype (orig.ident)") +
+  ylab("Percentage (%)") + # Y-axis label
+  scale_fill_discrete(name = "Genotype") + # Optional: Rename legend title
+  coord_cartesian(ylim = c(0, 10)) +
+  theme_bw(base_size = 12) +
+  theme(
+    panel.grid.major = element_blank(), # Cleaner background
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), # Rotate x-axis labels if needed
+    legend.position = "right" # Or "bottom", "none" if fill is redundant
+  )
+
+# Print the plot to the screen
+print(p_og3_barplot)
+
+# --- 4. Save the plot (optional) ---
+plot_filename <- file.path(output_dir_figure, paste0(output_prefix, "_percentage_barplot.pdf"))
+message("Saving OG3 percentage barplot to: ", plot_filename)
+ggsave(plot_filename, plot = p_og3_barplot, height = 5, width = 6) # Adjust size as needed
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+### 3.1.4 highlight OG
+highlight cluster of interest: OG3
+First, we will order the color code for each celltype, then use Dimplot to color OG3
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_PF$celltype)
+colors <- c("grey","grey","grey","grey","grey",
+            "grey","grey","grey","#00B6EB","grey","grey",
+            "grey","grey","grey")
+DimPlot(suture_mes_mito_MAGIC_PF, label = T, cols = colors,repel = T)
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG3_highlighted_0430.pdf", device = "pdf", width = 4, height = 3)
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG3_highlighted_nolabel_0430.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG3_highlighted_split_nolabel_0430.png", device = "png", width = 10, height = 3)
+```
+For OG2
+highlight cluster of interest: OG2
+First, we will order the color code for each celltype, then use Dimplot to color OG2
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_PF$celltype)
+colors <- c("grey","grey","grey","grey","grey",
+            "grey","grey","#00BFC4","grey","grey","grey",
+            "grey","grey","grey")
+DimPlot(suture_mes_mito_MAGIC_PF, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG2_highlighted_0430.pdf", device = "pdf", width = 4, height = 3)
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG2_highlighted_nolabel_0430.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG2_highlighted_split_nolabel_0430.png", device = "png", width = 10, height = 3)
+```
+
+highlight cluster of interest: OG1
+First, we will order the color code for each celltype, then use Dimplot to color OG1
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_PF$celltype)
+colors <- c("grey","grey","grey","grey","grey","grey",
+            "#00C094","grey","grey","grey","grey",
+            "grey","grey","grey")
+DimPlot(suture_mes_mito_MAGIC_PF, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG1_highlighted_0430.pdf", device = "pdf", width = 4, height = 3)
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG1_highlighted_nolabel_0430.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG1_highlighted_split_nolabel_0430.png", device = "png", width = 10, height = 3)
+```
+
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_PF$celltype)
+colors <- c("grey","grey","grey","grey","grey","#00BC56",
+            "grey","grey","grey","grey","grey",
+            "grey","grey","grey")
+DimPlot(suture_mes_mito_MAGIC_PF, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG0_highlighted_0430.pdf", device = "pdf", width = 4, height = 3)
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG0_highlighted_nolabel_0430.pdf", device = "pdf", width = 3, height = 3)
+```
+
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG0_highlighted_split_nolabel_0430.png", device = "png", width = 10, height = 3)
+```
+
+##3.2 SAG
+### 3.2.1 Load data
+```{r,load data}
+gc()
+rm(list=ls())
+suture_mes_mito_MAGIC_SAG <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed_SAG_0430.rds")
+```
+
+```{r, change levels}
+suture_mes_mito_MAGIC_SAG$celltype <- factor(suture_mes_mito_MAGIC_SAG$celltype, levels = c("Peri","Chondro","EC","LIG","PO","OG0","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4","MG5","removed")) 
+levels(suture_mes_mito_MAGIC_SAG$celltype)
+```
+
+```{r,check umap plot}
+DimPlot(suture_mes_mito_MAGIC_SAG, reduction = "umap", label = T)
+DimPlot(suture_mes_mito_MAGIC_SAG, reduction = "umap", group.by = "celltype")
+```
+
+
+```{r,prepare function for cell percentage}
+# --- Ensure necessary libraries are loaded ---
+# install.packages(c("Seurat", "ggplot2", "data.table", "dplyr", "forcats", "reshape2")) # If needed, uncomment and run to install
+library(Seurat)
+library(ggplot2)
+library(data.table)
+library(dplyr)
+library(forcats)
+library(reshape2) # melt function is in this package (although data.table::melt also works)
+
+#' @title Calculate and Plot Cell Proportions from Seurat Object Metadata
+#'
+#' @description This function takes a Seurat object, extracts metadata, calculates cell counts
+#'              and percentages grouped by 'orig.ident' and a specified metadata column,
+#'              saves the results to CSV files, and generates several summary plots.
+#'
+#' @param seurat_obj A Seurat object.
+#' @param group_by_metadata A string specifying the metadata column name to group cells by (e.g., "celltype", "seurat_clusters").
+#' @param output_prefix A string used as a prefix for all output file names. Helps in organizing outputs.
+#' @param output_dir_table Path to the directory where CSV tables will be saved. Defaults to "./OutputTable".
+#' @param output_dir_figure Path to the directory where PDF plots will be saved. Defaults to "./OutputFigure".
+#' @param relevel_vector An optional character vector specifying the desired order of levels for the `group_by_metadata` factor on the plot's x-axis. If NULL (default), the default factor ordering is used.
+#'
+#' @return Invisibly returns the long-format data table containing percentages (`split_count_mut_melt`).
+#'
+#' @importFrom Seurat Idents<-
+#' @import data.table
+#' @import dplyr
+#' @import ggplot2
+#' @import forcats
+#' @import reshape2
+#'
+#' @examples
+#' \dontrun{
+#' # Assume you have a Seurat object named 'my_seurat_object'
+#' # and you want to group by 'celltype' metadata
+#' calculate_and_plot_proportions(
+#'   seurat_obj = my_seurat_object,
+#'   group_by_metadata = "celltype",
+#'   output_prefix = "my_analysis_celltype",
+#'   relevel_vector = c("TypeA", "TypeC", "TypeB") # Optional ordering
+#' )
+#'
+#' # Group by 'seurat_clusters'
+#' calculate_and_plot_proportions(
+#'   seurat_obj = my_seurat_object,
+#'   group_by_metadata = "seurat_clusters",
+#'   output_prefix = "my_analysis_clusters"
+#' )
+#' }
+
+calculate_and_plot_proportions <- function(seurat_obj,
+                                           group_by_metadata,
+                                           output_prefix,
+                                           output_dir_table = "./OutputTable",
+                                           output_dir_figure = "./OutputFigure",
+                                           relevel_vector = NULL) {
+
+  # --- Parameter validation ---
+  if (!inherits(seurat_obj, "Seurat")) {
+    stop("Input 'seurat_obj' must be a Seurat object.")
+  }
+  if (!is.character(group_by_metadata) || length(group_by_metadata) != 1) {
+    stop("'group_by_metadata' must be a single string.")
+  }
+  if (!group_by_metadata %in% colnames(seurat_obj@meta.data)) {
+    stop(paste("Metadata column", shQuote(group_by_metadata), "not found in the Seurat object."))
+  }
+  if (!is.character(output_prefix) || length(output_prefix) != 1) {
+    stop("'output_prefix' must be a single string.")
+  }
+  if (!dir.exists(output_dir_table)) {
+      message("Creating output table directory: ", output_dir_table)
+      dir.create(output_dir_table, recursive = TRUE)
+  }
+   if (!dir.exists(output_dir_figure)) {
+      message("Creating output figure directory: ", output_dir_figure)
+      dir.create(output_dir_figure, recursive = TRUE)
+  }
+
+
+  # --- 1. Extract and calculate cell counts ---
+  message("Step 1: Calculating cell counts...")
+  # Set Idents (although not directly used for counting in this specific workflow, but consistent with original code)
+  Idents(seurat_obj) <- seurat_obj[[group_by_metadata, drop = TRUE]]
+
+  ## Extract metadata
+  md <- as.data.table(seurat_obj@meta.data)
+
+  ## Calculate cell counts by "orig.ident" and specified metadata column
+  split_count_long <- md[, .N, by = c("orig.ident", group_by_metadata)]
+  setnames(split_count_long, "N", "Number") # Rename count column
+
+  ## Convert to wide format (dcast)
+  # Build dcast formula
+  formula_dcast <- as.formula(paste("orig.ident ~", group_by_metadata))
+  split_count_wide <- dcast(split_count_long, formula_dcast, value.var = "Number", fill = 0) # fill=0 replaces NA
+
+  ## Convert back to long format (melt) - for plotting and saving
+  split_count_melt <- melt(split_count_wide,
+                           id.vars = "orig.ident",
+                           variable.name = group_by_metadata, # Use input parameter
+                           value.name = "Number")
+  # Ensure the group_by_metadata column after melt is factor type
+  split_count_melt[[group_by_metadata]] <- as.factor(split_count_melt[[group_by_metadata]])
+
+
+  ## Save original counts (long format)
+  count_filename_csv <- file.path(output_dir_table, paste0(output_prefix, "_cell_number_", group_by_metadata, ".csv"))
+  message("Saving raw counts (long format) to: ", count_filename_csv)
+  fwrite(split_count_melt, file = count_filename_csv, row.names = FALSE)
+
+  # --- 2. Plot proportional chart of original counts ---
+  message("Step 2: Generating count proportion plot...")
+
+  # Factor level reordering (if provided)
+  if (!is.null(relevel_vector)) {
+    message("Releveling factor: ", group_by_metadata)
+    # Check if all provided levels are in the data
+    current_levels <- levels(split_count_melt[[group_by_metadata]])
+    if (!all(relevel_vector %in% current_levels)) {
+        warning("Some levels in 'relevel_vector' are not present in the data for column '", group_by_metadata, "'. Proceeding with available levels.")
+        relevel_vector <- intersect(relevel_vector, current_levels)
+    }
+     if (length(relevel_vector) > 0) {
+       split_count_melt[[group_by_metadata]] <- fct_relevel(split_count_melt[[group_by_metadata]], relevel_vector)
+     } else {
+        warning("No valid levels remaining in 'relevel_vector' after checking against data. Skipping releveling.")
+     }
+  }
+
+  p1 <- ggplot(split_count_melt, aes(fill = orig.ident, x = .data[[group_by_metadata]], y = Number)) +
+    geom_bar(position = "fill", stat = "identity") +
+    ggtitle(paste("Proportion of cells per", group_by_metadata, "across identities (raw counts)")) +
+    xlab(group_by_metadata) +
+    ylab("Proportion of cells") +
+    theme_minimal(base_size = 12) + # Use a slightly cleaner theme
+    theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), # Rotate X-axis labels to prevent overlap
+        legend.position = "bottom" # Place legend at bottom
+        )
+
+  plot_filename_p1 <- file.path(output_dir_figure, paste0(output_prefix, "_Percentage_cell_in_each_", group_by_metadata, "_unnormalized.pdf"))
+  message("Saving count proportion plot to: ", plot_filename_p1)
+  ggsave(plot_filename_p1, plot = p1, height = 5, width = max(7.5, length(levels(split_count_melt[[group_by_metadata]]))*0.5 + 2 )) # Dynamic width
+
+  # --- 3. Calculate percentages within each orig.ident ---
+  message("Step 3: Calculating percentages within each orig.ident...")
+
+  # Use data.table chaining operations to calculate percentages more efficiently
+  # Start from long format counts
+  split_count_long[, total_per_ident := sum(Number), by = orig.ident] # Calculate total for each orig.ident
+  split_count_long[, Percentage := fifelse(total_per_ident > 0, (Number / total_per_ident) * 100, 0), by = orig.ident] # Calculate percentage, handle cases where total is 0
+
+  # Extract long format percentage data for saving and plotting
+  split_count_mut_melt <- split_count_long[, .(orig.ident, get(group_by_metadata), Percentage)]
+  setnames(split_count_mut_melt, "V2", group_by_metadata) # Rename column name generated by get()
+  # Ensure factor type and order are consistent with previous
+  split_count_mut_melt[[group_by_metadata]] <- factor(split_count_mut_melt[[group_by_metadata]], levels = levels(split_count_melt[[group_by_metadata]]))
+
+
+  # Create wide format percentage data for saving
+  formula_dcast_perc <- as.formula(paste("orig.ident ~", group_by_metadata))
+  split_count_mut_wide <- dcast(split_count_mut_melt, formula_dcast_perc, value.var = "Percentage", fill = 0)
+
+  ## Save wide format percentage table
+  perc_wide_filename_csv <- file.path(output_dir_table, paste0(output_prefix, "_cell_percentage_", group_by_metadata, "_unmelt.csv"))
+  message("Saving percentages (wide format) to: ", perc_wide_filename_csv)
+  fwrite(split_count_mut_wide, file = perc_wide_filename_csv, row.names = FALSE)
+
+  ## Save long format percentage table
+  perc_long_filename_csv <- file.path(output_dir_table, paste0(output_prefix, "_cell_percentage_", group_by_metadata, ".csv"))
+  message("Saving percentages (long format) to: ", perc_long_filename_csv)
+  fwrite(split_count_mut_melt, file = perc_long_filename_csv, row.names = FALSE)
+
+  # --- 4. Plot percentage charts ---
+  message("Step 4: Generating percentage plots...")
+
+  ## 4a. Percentage stacked bar chart (filled by group, showing proportions) - Note this will look the same as p1 visually
+  p2 <- ggplot(split_count_mut_melt, aes(fill = orig.ident, x = .data[[group_by_metadata]], y = Percentage)) +
+    geom_bar(position = "fill", stat = "identity") + # position="fill" will recalculate proportions
+    ggtitle(paste("Proportion of cells per", group_by_metadata, "across identities (normalized proportions)")) +
+    xlab(group_by_metadata) +
+    ylab("Proportion of cells") +
+    theme_minimal(base_size = 12) +
+    theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.position = "bottom"
+        )
+
+  plot_filename_p2 <- file.path(output_dir_figure, paste0(output_prefix, "_Percentage_cell_in_each_", group_by_metadata, "_normalized_fill.pdf"))
+  message("Saving percentage proportion plot (fill) to: ", plot_filename_p2)
+  ggsave(plot_filename_p2, plot = p2, height = 5, width = max(7.5, length(levels(split_count_mut_melt[[group_by_metadata]]))*0.5 + 2 ))
+
+  ## 4b. Percentage stacked bar chart (directly showing calculated percentages)
+  # Using geom_col equivalent to geom_bar(stat="identity")
+  p3 <- ggplot(split_count_mut_melt, aes(x = .data[[group_by_metadata]], y = Percentage, fill = orig.ident)) +
+    geom_col(color = "black") + # Add black borders
+    ggtitle(paste("Percentage of cells within each", group_by_metadata)) +
+    xlab(group_by_metadata) +
+    ylab("Percentage (%)") +
+    theme_bw(base_size = 12) +
+    theme(
+        panel.grid = element_blank(), # Remove background grid lines
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.position = "bottom"
+        )
+
+  plot_filename_p3 <- file.path(output_dir_figure, paste0(output_prefix, "_Percentage_cell_in_each_", group_by_metadata, "_normalized_stack.pdf"))
+  message("Saving percentage stacked plot to: ", plot_filename_p3)
+  ggsave(plot_filename_p3, plot = p3, height = 5, width = max(7.5, length(levels(split_count_mut_melt[[group_by_metadata]]))*0.5 + 2 ))
+
+
+  ## 4c. Percentage side-by-side bar chart (Dodge)
+  p4 <- ggplot(split_count_mut_melt, aes(x = .data[[group_by_metadata]], y = Percentage, fill = orig.ident)) +
+    geom_col(color = "black", position = position_dodge(preserve = "single")) + # Use position_dodge and preserve single bar positions
+    ggtitle(paste("Percentage of cells within each", group_by_metadata)) +
+    xlab(group_by_metadata) +
+    ylab("Percentage (%)") +
+    theme_bw(base_size = 12) +
+    theme(
+        panel.grid = element_blank(),
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        legend.position = "bottom"
+        )
+
+  plot_filename_p4 <- file.path(output_dir_figure, paste0(output_prefix, "_Percentage_cell_in_each_", group_by_metadata, "_normalized_dodge.pdf"))
+  message("Saving percentage dodged plot to: ", plot_filename_p4)
+  # Dodge plots usually need wider space
+  ggsave(plot_filename_p4, plot = p4, height = 5, width = max(8, length(levels(split_count_mut_melt[[group_by_metadata]])) * length(unique(split_count_mut_melt$orig.ident)) * 0.2 + 3))
+
+  message("Function finished successfully!")
+
+  # Return long format percentage data frame for continued use in R environment
+  invisible(split_count_mut_melt)
+}
+
+# --- How to use ---
+# Assume your Seurat object is called suture_mes_mito_MAGIC_PF
+# and you want to group by "celltype"
+
+# Example usage 1: Basic usage
+# calculate_and_plot_proportions(
+#   seurat_obj = suture_mes_mito_MAGIC_PF,
+#   group_by_metadata = "celltype",
+#   output_prefix = "suture_mes_mito_MAGIC_PF_harmony_celltype" # Provide a filename prefix
+# )
+
+# Example usage 2: Specify output directories and factor ordering
+# my_celltype_order <- c("Peri","Chondro","EC","LIG","PO","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4") # Define your order
+# calculate_and_plot_proportions(
+#   seurat_obj = suture_mes_mito_MAGIC_PF,
+#   group_by_metadata = "celltype",
+#   output_prefix = "suture_mes_mito_MAGIC_PF_harmony_celltype_ordered",
+#   output_dir_table = "./CustomTables",  # Custom table output directory
+#   output_dir_figure = "./CustomFigures", # Custom figure output directory
+#   relevel_vector = my_celltype_order       # Pass in ordering vector
+# )
+
+# Example usage 3: Group by different metadata, such as 'seurat_clusters'
+# calculate_and_plot_proportions(
+#   seurat_obj = suture_mes_mito_MAGIC_PF,
+#   group_by_metadata = "seurat_clusters",
+#   output_prefix = "suture_mes_mito_MAGIC_PF_harmony_clusters"
+# )
+```
+
+```{r,DPA-based percentage comparison}
+# --- Ensure necessary libraries are loaded ---
+# install.packages(c("Seurat", "data.table", "dplyr", "tibble")) # If needed
+library(Seurat)
+library(data.table)
+library(dplyr)
+library(tibble) # For remove_rownames and column_to_rownames
+
+#' @title Perform Differential Cell Proportion Analysis
+#'
+#' @description This function automates the process of calculating cell counts per group
+#'              and condition, performing pairwise differential proportion tests using
+#'              functions from an external script (e.g., diffprop_functions.R), and
+#'              saving the results across a range of error probabilities.
+#'
+#' @param seurat_obj A Seurat object.
+#' @param group_by_metadata A string specifying the metadata column name to group cells by (e.g., "celltype"). This column defines the populations whose proportions are compared.
+#' @param comparisons A list of character vectors. Each vector must have length 2,
+#'                   in the format `c("condition_treatment", "condition_control")`.
+#'                   These values must correspond to unique values in the 'orig.ident'
+#'                   column of the Seurat object's metadata.
+#'                   Example: `list(c("DM_PF", "WT_PF"), c("KO_PF", "WT_PF"))`.
+#' @param error_probabilities A numeric vector of error probabilities (p) to test in `generateNull`.
+#'                            Defaults to `c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05)`.
+#' @param n_iterations An integer specifying the number of iterations ('n') for `generateNull`.
+#'                     Defaults to 100000.
+#' @param diffprop_script_path The file path to the R script containing the `generateNull`
+#'                             and `two.class.test` functions. Defaults to "diffprop_functions.R".
+#' @param output_prefix A string used as a prefix for all output file names.
+#' @param output_dir_table Path to the directory where CSV tables will be saved. Defaults to "./OutputTable".
+#'
+#' @return A list containing the results tables (p-values) for each comparison across the specified error probabilities. Each element in the list corresponds to a comparison.
+#'
+#' @importFrom Seurat Idents<-
+#' @import data.table
+#' @import dplyr
+#' @import tibble
+#'
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' # Assume 'suture_mes_mito_MAGIC_PF' is your Seurat object
+#' # Assume 'diffprop_functions.R' is in your working directory or accessible path
+#'
+#' # Define the comparisons you want to make
+#' my_comparisons <- list(
+#'   c("DM_PF", "WT_PF"),
+#'   c("KO_PF", "WT_PF"),
+#'   c("Runx2_PF", "WT_PF"),
+#'   c("DM_PF", "Runx2_PF"),
+#'   c("KO_PF", "Runx2_PF"),
+#'   c("DM_PF", "KO_PF")
+#' )
+#'
+#' # Run the analysis
+#' results_list <- run_differential_proportion_analysis(
+#'   seurat_obj = suture_mes_mito_MAGIC_PF,
+#'   group_by_metadata = "celltype",
+#'   comparisons = my_comparisons,
+#'   output_prefix = "suture_mes_mito_MAGIC_PF_DPA"
+#' )
+#'
+#' # Access results for a specific comparison, e.g., DM_PF vs WT_PF
+#' # dm_vs_wt_results <- results_list[["DM_PF_vs_WT_PF"]]
+#' # print(dm_vs_wt_results)
+#' }
+run_differential_proportion_analysis <- function(
+    seurat_obj,
+    group_by_metadata,
+    comparisons,
+    error_probabilities = c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05),
+    n_iterations = 100000,
+    diffprop_script_path = "diffprop_functions.R",
+    output_prefix,
+    output_dir_table = "./OutputTable"
+) {
+
+  # --- Input Validation ---
+  if (!inherits(seurat_obj, "Seurat")) {
+    stop("Input 'seurat_obj' must be a Seurat object.")
+  }
+  if (!is.character(group_by_metadata) || length(group_by_metadata) != 1) {
+    stop("'group_by_metadata' must be a single string.")
+  }
+  if (!group_by_metadata %in% colnames(seurat_obj@meta.data)) {
+    stop("Metadata column ", shQuote(group_by_metadata), " not found in the Seurat object.")
+  }
+  if (!is.list(comparisons) || length(comparisons) == 0) {
+      stop("'comparisons' must be a non-empty list.")
+  }
+  if (!all(sapply(comparisons, function(x) is.character(x) && length(x) == 2))) {
+      stop("Each element in 'comparisons' must be a character vector of length 2: c('treatment', 'control').")
+  }
+  all_conditions <- unique(unlist(comparisons))
+  if (!all(all_conditions %in% unique(seurat_obj$orig.ident))) {
+      missing_cond <- setdiff(all_conditions, unique(seurat_obj$orig.ident))
+      stop("The following conditions specified in 'comparisons' are not found in seurat_obj$orig.ident: ",
+           paste(missing_cond, collapse=", "))
+  }
+  if (!file.exists(diffprop_script_path)) {
+    stop("Differential proportion functions script not found at: ", diffprop_script_path)
+  }
+   if (!dir.exists(output_dir_table)) {
+      message("Creating output table directory: ", output_dir_table)
+      dir.create(output_dir_table, recursive = TRUE)
+  }
+  if (!is.character(output_prefix) || length(output_prefix) != 1) {
+    stop("'output_prefix' must be a single string.")
+  }
+
+
+  # --- 1. Source the differential proportion functions ---
+  message("Sourcing functions from: ", diffprop_script_path)
+  source(diffprop_script_path)
+  # Check if functions are loaded (optional but good practice)
+  if (!exists("generateNull") || !exists("two.class.test")) {
+      stop("Functions 'generateNull' and/or 'two.class.test' not found after sourcing the script.")
+  }
+
+
+  # --- 2. Prepare the observed counts matrix ---
+  message("Preparing observed counts matrix...")
+  # Set Idents (consistent with original code, though maybe not strictly needed for count calculation)
+  Idents(seurat_obj) <- seurat_obj[[group_by_metadata, drop = TRUE]]
+
+  ## Extract metadata
+  md <- as.data.table(seurat_obj@meta.data)
+
+  ## Count cells per unique combination of "orig.ident" and the grouping metadata
+  counts_long <- md[, .N, by = c("orig.ident", group_by_metadata)]
+
+  ## Create wide format matrix: orig.ident as rows, group_by_metadata as columns
+  formula_dcast <- as.formula(paste("orig.ident ~", group_by_metadata))
+  obs.counts.df <- dcast(counts_long, formula_dcast, value.var = "N", fill = 0) # Use fill=0 for NAs
+
+  # Convert to matrix with orig.ident as rownames
+  obs.counts <- obs.counts.df %>%
+    tibble::remove_rownames() %>%
+    tibble::column_to_rownames(var = "orig.ident") %>%
+    as.matrix()
+
+  ## Save the counts matrix
+  count_filename <- file.path(output_dir_table, paste0(output_prefix, "_observed_counts_matrix.csv"))
+  message("Saving observed counts matrix to: ", count_filename)
+  write.csv(obs.counts, file = count_filename, row.names = TRUE)
+
+
+  # --- 3. Run Differential Proportion Analysis ---
+  message("Running Differential Proportion Analysis for ", length(comparisons), " comparisons across ", length(error_probabilities), " error probabilities...")
+
+  # Initialize a list to store results for each comparison
+  results_list <- vector("list", length(comparisons))
+  comparison_names <- sapply(comparisons, function(x) paste0(x[1], "_vs_", x[2]))
+  names(results_list) <- comparison_names
+
+  # Pre-allocate result tables within the list
+  for (comp_name in comparison_names) {
+      results_list[[comp_name]] <- matrix(NA,
+                                          nrow = length(error_probabilities),
+                                          ncol = ncol(obs.counts), # Assuming two.class.test returns p-values for each group
+                                          dimnames = list(as.character(error_probabilities), colnames(obs.counts)))
+  }
+
+
+  ## Loop through each error probability
+  for (i in seq_along(error_probabilities)) {
+    err_prob <- error_probabilities[i]
+    message("  Generating null distribution for p = ", err_prob, " (", i, "/", length(error_probabilities), ")")
+    # Generate the null distribution once per error probability
+    tip.exp <- generateNull(obs.counts, n = n_iterations, p = err_prob)
+
+    ## Loop through each specified comparison
+    for (j in seq_along(comparisons)) {
+      comp <- comparisons[[j]]
+      comp_name <- comparison_names[j]
+      cond_treatment <- comp[1]
+      cond_control <- comp[2]
+
+      message("    Testing: ", cond_treatment, " vs ", cond_control)
+      # Run the two-class test
+      res.1 <- tryCatch({
+           two.class.test(obs.counts, tip.exp,
+                         cond.control = cond_control,
+                         cond.treatment = cond_treatment,
+                         to.plot = FALSE)
+      }, error = function(e) {
+          warning("Error during two.class.test for ", comp_name, " at p=", err_prob, ": ", e$message)
+          # Return a vector of NAs matching expected output dimension
+          rep(NA_real_, ncol(obs.counts))
+      })
+
+      # Check if the result has the expected length
+      if(length(res.1) == ncol(obs.counts)) {
+          # Store the results in the pre-allocated matrix
+          results_list[[comp_name]][as.character(err_prob), ] <- res.1
+      } else {
+          warning("Unexpected result length from two.class.test for ", comp_name, " at p=", err_prob, ". Expected ", ncol(obs.counts), " values, got ", length(res.1), ". Storing NAs.")
+           results_list[[comp_name]][as.character(err_prob), ] <- rep(NA_real_, ncol(obs.counts))
+      }
+    } # End loop comparisons
+  } # End loop error_probabilities
+
+
+  # --- 4. Save Results Tables ---
+  message("Saving results tables...")
+  for (comp_name in names(results_list)) {
+    result_filename <- file.path(output_dir_table, paste0(output_prefix, "_DPA_results_", comp_name, ".csv"))
+    message("  Saving: ", result_filename)
+    # write.csv expects a data frame usually, ensure matrix is handled correctly
+    write.csv(results_list[[comp_name]], file = result_filename, row.names = TRUE)
+  }
+
+  message("Differential proportion analysis finished successfully!")
+
+  # Return the list of results tables
+  invisible(results_list)
+}
+```
+
+
+```{r, plot for SAG }
+my_celltype_order <- c("Peri","Chondro","EC","LIG","PO","OG0","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4") # Define your order
+calculate_and_plot_proportions(
+   seurat_obj = suture_mes_mito_MAGIC_SAG,
+   group_by_metadata = "celltype",
+   output_prefix = "suture_mes_mito_MAGIC_SAG_harmony_celltype_ordered",
+   output_dir_table = "./OutputTable",  # Custom table output directory
+   output_dir_figure = "./OutputFigure", # Custom figure output directory
+   relevel_vector = my_celltype_order       # Pass in ordering vector
+ )
+```
+
+### 3.2.2 DPA approach
+
+```{r, source functions for DPA assay}
+source("diffprop_functions.R")
+```
+
+```{r,define comparison}
+my_comparisons <- list(
+  c("DM_SAG", "WT_SAG"),
+  c("KO_SAG", "WT_SAG"),
+  c("Runx2_SAG", "WT_SAG"),
+  c("DM_SAG", "Runx2_SAG"),
+  c("KO_SAG", "Runx2_SAG"),
+  c("DM_SAG", "KO_SAG")
+)
+```
+
+```{r}
+# Compare Seurat object is suture_mes_mito_MAGIC_SAG
+dpa_results <- run_differential_proportion_analysis(
+  seurat_obj = suture_mes_mito_MAGIC_SAG,
+  group_by_metadata = "celltype",  # Or other metadata like "seurat_clusters"
+  comparisons = my_comparisons,
+  output_prefix = "suture_mes_mito_MAGIC_SAG_celltype_DPA_0430",
+    output_dir_table = "./OutputTable"
+)
+```
+
+### 3.2.3 Plot OG3
+```{r}
+
+# --- 1. Load the data ---
+# Make sure the path to your file is correct
+file_path <- "./OutputTable/suture_mes_mito_MAGIC_SAG_harmony_celltype_ordered_cell_percentage_celltype.csv"
+
+# Check if file exists before trying to read
+if (!file.exists(file_path)) {
+  stop("CSV file not found at: ", file_path)
+}
+
+percentage_data <- fread(file_path)
+
+# Check the column names to be sure
+print(colnames(percentage_data))
+# Expected columns: "orig.ident", "celltype", "Percentage" (or similar)
+# Adjust the code below if your column names are different.
+
+# --- 2. Filter for OG3 celltype ---
+# Using data.table syntax
+og3_percentage_data <- percentage_data[celltype == "OG3"]
+
+
+
+# --- 3. Create the bar chart for OG3 percentages ---
+# Define output directory and prefix if needed for saving
+output_dir_figure = "./OutputFigure" # Or your preferred directory
+output_prefix = "suture_mes_mito_MAGIC_SAG_harmony_OG3_only"
+
+if (!dir.exists(output_dir_figure)) {
+  dir.create(output_dir_figure, recursive = TRUE)
+}
+
+
+# Create the plot
+# Using geom_col is appropriate here as 'Percentage' is the value to plot directly
+p_og3_barplot <- ggplot(og3_percentage_data, aes(x = orig.ident, y = Percentage, fill = orig.ident)) +
+  geom_col(color = "black", position = position_dodge()) + # Use dodge if you potentially had multiple bars per x category, though not strictly needed here. geom_col() without dodge is fine too.
+  # geom_col(color = "black") + # Simpler version if dodging isn't needed
+  ggtitle("Percentage of OG3 Cells within each Genotype") + # Title clarifying the meaning
+  xlab("Genotype (orig.ident)") +
+  ylab("Percentage (%)") + # Y-axis label
+  scale_fill_discrete(name = "Genotype") + # Optional: Rename legend title
+  coord_cartesian(ylim = c(0, 10)) +
+  theme_bw(base_size = 12) +
+  theme(
+    panel.grid.major = element_blank(), # Cleaner background
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), # Rotate x-axis labels if needed
+    legend.position = "right" # Or "bottom", "none" if fill is redundant
+  )
+
+# Print the plot to the screen
+print(p_og3_barplot)
+
+# --- 4. Save the plot (optional) ---
+plot_filename <- file.path(output_dir_figure, paste0(output_prefix, "_percentage_barplot.pdf"))
+message("Saving OG3 percentage barplot to: ", plot_filename)
+ggsave(plot_filename, plot = p_og3_barplot, height = 5, width = 6) # Adjust size as needed
+```
+
+
+
+### 3.2.4 highlight OG
+highlight cluster of interest: OG3
+First, we will order the color code for each celltype, then use Dimplot to color OG3
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_SAG$celltype)
+colors <- c("grey","grey","grey","grey","grey",
+            "grey","grey","grey","#00B6EB","grey","grey",
+            "grey","grey","grey")
+DimPlot(suture_mes_mito_MAGIC_SAG, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG3_highlighted_0430.pdf", device = "pdf", width = 4, height = 3)
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG3_highlighted_nolabel_0430.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG3_highlighted_split_nolabel_0430.png", device = "png", width = 10, height = 3)
+```
+For OG2
+highlight cluster of interest: OG2
+First, we will order the color code for each celltype, then use Dimplot to color OG2
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_SAG$celltype)
+colors <- c("grey","grey","grey","grey","grey","grey",
+            "grey","#00BFC4","grey","grey","grey",
+            "grey","grey","grey")
+DimPlot(suture_mes_mito_MAGIC_SAG, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG2_highlighted_0430.pdf", device = "pdf", width = 4, height = 3)
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG2_highlighted_nolabel_0430.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG2_highlighted_split_nolabel_0430.png", device = "png", width = 10, height = 3)
+```
+
+highlight cluster of interest: OG1
+First, we will order the color code for each celltype, then use Dimplot to color OG1
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_SAG$celltype)
+colors <- c("grey","grey","grey","grey","grey","grey",
+            "#00C094","grey","grey","grey","grey",
+            "grey","grey","grey")
+DimPlot(suture_mes_mito_MAGIC_SAG, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG1_highlighted_0430.pdf", device = "pdf", width = 4, height = 3)
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG1_highlighted_nolabel_0430.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG1_highlighted_split_nolabel_0430.png", device = "png", width = 10, height = 3)
+```
+
+
+
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_SAG$celltype)
+colors <- c("grey","grey","grey","grey","grey","#00BC56",
+            "grey","grey","grey","grey","grey",
+            "grey","grey","grey")
+DimPlot(suture_mes_mito_MAGIC_SAG, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG0_highlighted_0430.pdf", device = "pdf", width = 4, height = 3)
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG0_highlighted_nolabel_0430.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG0_highlighted_split_nolabel_0430.png", device = "png", width = 10, height = 3)
+```
+
+# 4 Split OG object
+## 4.1 Load data
+```{r}
+gc()
+rm(list=ls())
+suture_mes_mito_MAGIC <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed_20250420.rds")
+
+```
+
+```{r, check the order of celltype for display}
+levels(suture_mes_mito_MAGIC@meta.data$celltype)
+```
+## 4.2 Split by cluster/celltype
+```{r}
+suture_mes_mito_MAGIC_OG0 <- subset(suture_mes_mito_MAGIC, idents="OG0")
+suture_mes_mito_MAGIC_OG1 <- subset(suture_mes_mito_MAGIC, idents="OG1")
+suture_mes_mito_MAGIC_OG2 <- subset(suture_mes_mito_MAGIC, idents="OG2")
+suture_mes_mito_MAGIC_OG3 <- subset(suture_mes_mito_MAGIC, idents="OG3")
+suture_mes_mito_MAGIC_OG <- subset(suture_mes_mito_MAGIC, idents=c("OG0","OG1","OG2","OG3"))
+```
+
+```{r,save all OG objects}
+saveRDS(suture_mes_mito_MAGIC_OG0, file = "./SeuratObject/suture_mes_mito_MAGIC_OG0_0430.rds")
+saveRDS(suture_mes_mito_MAGIC_OG1, file = "./SeuratObject/suture_mes_mito_MAGIC_OG1_0430.rds")
+saveRDS(suture_mes_mito_MAGIC_OG2, file = "./SeuratObject/suture_mes_mito_MAGIC_OG2_0430.rds")
+saveRDS(suture_mes_mito_MAGIC_OG3, file = "./SeuratObject/suture_mes_mito_MAGIC_OG3_0430.rds")
+saveRDS(suture_mes_mito_MAGIC_OG, file = "./SeuratObject/suture_mes_mito_MAGIC_OG_0430.rds")
+```
+
+Split OG3 object by group
+```{r, split by group}
+#suture_mes_mito_MAGIC_OG3_object_list <- SplitObject(suture_mes_mito_MAGIC_OG3, split.by = "group")
+#suture_mes_mito_MAGIC_OG3_SAG <- suture_mes_mito_MAGIC_OG3_object_list$SAG
+#suture_mes_mito_MAGIC_OG3_PF <- suture_mes_mito_MAGIC_OG3_object_list$PF
+```
+
+
+# 5 DEG heatmap for OG3
+Since OG3 cluster displayed similar trend as we saw in the differet rescue effect, we want to figure out what happened in this cluster.
+This cluster is associated with terminal differentiated osteoblasts, but who regulate their fate?
+## 5.1 Load data
+
+```{r,Load packages and datasets}
+gc()
+rm(list=ls())
+suture_mes_mito_MAGIC_OG <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_OG_0430.rds")
+```
+
+## 5.2 Prepare DEGs RNA in OG3 in OG population
+##5.2.1 DEG gene names
+```{r}
+suture_mes_mito_MAGIC_OG$celltype.group <- paste(suture_mes_mito_MAGIC_OG$celltype, suture_mes_mito_MAGIC_OG$orig.ident, sep = "_")
+suture_mes_mito_MAGIC_OG$celltype <- Idents(suture_mes_mito_MAGIC_OG)
+Idents(suture_mes_mito_MAGIC_OG) <- "celltype.group"
+table(suture_mes_mito_MAGIC_OG$celltype.group)
+```
+
+```{r}
+cellfordeg<-as.factor(rownames(table(suture_mes_mito_MAGIC_OG$orig.ident)))
+cellfordeg
+```
+
+Generate and harvest the top20 changed genes among different gennotypes. Based on RNA data
+```{r}
+DefaultAssay(suture_mes_mito_MAGIC_OG) <- "RNA"
+n <- length(cellfordeg)  # get the length of the list
+for (i in 1:(n-1)) {  # iterate through all pairs of elements
+  for (j in (i+1):n) {
+    CELLDEG_OG3 <- FindMarkers(suture_mes_mito_MAGIC_OG, ident.1 = paste0("OG3_", cellfordeg[[i]]), ident.2 = paste0("OG3_",cellfordeg[[j]]), verbose = FALSE)
+    top10 <- CELLDEG_OG3 %>% top_n(n = 20, wt = avg_log2FC) # You may change n=20 to other number to get top_n genes as you wish.
+    write.csv(top10,paste0("OG3_", cellfordeg[i],"_", cellfordeg[[j]] ,"_RNA_top20_0430.CSV"))
+  }
+}
+
+```
+
+Gather all DEs for OG3
+```{r}
+# list all the CSV files in the directory
+files <- list.files(pattern = "*_RNA_top20.CSV")
+# create an empty list to store the dataframes
+unique_vals <- list()
+# loop through each file and read it into a dataframe and add it to the list
+for (file in files) {
+  df <- read.csv(file, stringsAsFactors = FALSE)
+  unique_vals[[file]] <- unique(df[,1])
+}
+
+
+# combine all the unique values into one vector and remove duplicates
+unique_first_col <- unique(unlist(unique_vals))
+```
+
+```{r}
+OG3_DE_RNA <- as.factor(unique_first_col)
+```
+
+
+## 5.2.2 Seurat for DEs in OG3
+Here we subset the OG3 object using all the DEs in OG3.
+
+```{r}
+
+suture_mes_mito_MAGIC_OG3_DE <- subset(suture_mes_mito_MAGIC_OG, features = OG3_DE_RNA)
+Idents(suture_mes_mito_MAGIC_OG3_DE) <- "celltype"
+suture_mes_mito_MAGIC_OG3_DE <- subset(suture_mes_mito_MAGIC_OG3_DE, idents = "OG3")
+```
+
+Here, we extracted the expression matrix based on MAGIC imputation
+```{r}
+suture_mes_mito_MAGIC_OG3_DE_matrix <- suture_mes_mito_MAGIC_OG3_DE@assays$MAGIC_SCT@data
+```
+
+Remove the barcode information
+```{r}
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("WT_SAG.*", "WT_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("KO_SAG.*", "KO_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix)<- gsub("Runx2_SAG.*", "Runx2_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("DM_SAG.*", "DM_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("WT_PF.*", "WT_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("KO_PF.*", "KO_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix)<- gsub("Runx2_PF.*", "Runx2_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("DM_PF.*", "DM_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+```
+
+Generate matrix
+
+```{r}
+df <- (as.matrix(suture_mes_mito_MAGIC_OG3_DE_matrix))
+df[1:3, 1:5]
+```
+Here, we want to check the number and sequence of the 8 genotype_tissue
+```{r}
+
+# Convert the first row of the matrix into a factor variable
+factors <- factor(colnames(df), levels = unique(colnames(df)))
+
+
+# Get the unique factor sequences and their frequencies
+unique_seqs <- table(factors)
+
+# Print the unique factor sequences and their frequencies
+cat("Unique factor sequences:\n")
+for (i in seq_along(unique_seqs)) {
+  cat("\t", names(unique_seqs)[i], ": ", unique_seqs[i], "\n")
+}
+
+#WT_PF :  250 
+#WT_SAG :  361 
+#Runx2_PF :  279 
+#Runx2_SAG :  60 
+#KO_PF :  190 
+#KO_SAG :  557 
+#DM_PF :  127 
+#DM_SAG :  267 
+```
+Unique factor sequences:
+	 WT_PF :  248 
+	 WT_SAG :  357 
+	 Runx2_PF :  284 
+	 Runx2_SAG :  61 
+	 KO_PF :  191 
+	 KO_SAG :  545 
+	 DM_PF :  129 
+	 DM_SAG :  268 
+We want to reorder them as ("WT_PF", "Runx2_PF", "KO_PF", "DM_PF", "WT_SAG", "Runx2_SAG", "KO_SAG","DM_SAG")
+```{r}
+dim(df)
+# Define the new order of column names
+new_order <- c(rep("WT_PF", 248), rep("Runx2_PF", 284), rep("KO_PF", 191), rep("DM_PF", 129),
+               rep("WT_SAG", 357), rep("Runx2_SAG", 61), rep("KO_SAG", 545), rep("DM_SAG", 268))
+
+
+# Reorder the columns of the matrix
+df_reordered <- df[, order(match(colnames(df), new_order))]
+
+dim(df_reordered)
+```
+
+```{r}
+df_reordered[1:3, 1:5]
+# Since these column are with same colname, we want to make them unique.
+colnames(df_reordered) <- c(paste0("WT_PF_", 1:248), paste0("Runx2_PF_", 1:284), paste0("KO_PF_", 1:191), paste0("DM_PF_", 1:129), paste0("WT_SAG_", 1:357), paste0("Runx2_SAG_", 1:61), paste0("KO_SAG_", 1:545), paste0("DM_SAG_", 1:268))
+
+
+```
+
+Generate an annotation dataframe to annotate each column
+```{r}
+annotation_col = data.frame(
+  group = c(rep("WT_PF", 248), rep("Runx2_PF", 284), rep("KO_PF", 191), rep("DM_PF", 129),
+               rep("WT_SAG", 357), rep("Runx2_SAG", 61), rep("KO_SAG", 545), rep("DM_SAG", 268))
+  
+)
+row.names(annotation_col) <- colnames(df_reordered)
+```
+Generate an annotation dataframe for color
+```{r}
+groupcolor <- c("#FF5733","#FFC300","#FF4081","#7B1FA2",
+                '#4CAF50','#2196F3','#795548','#2C427E') 
+names(groupcolor) <- c("WT_PF","Runx2_PF","KO_PF","DM_PF",
+                       "WT_SAG","Runx2_SAG","KO_SAG","DM_SAG") # group id
+
+ann_colors <- list(group=groupcolor) #You may add more catergories according to your designn
+```
+
+
+```{r}
+dim(df_reordered)
+ph_cluster_test <- function(x,j){
+  n=t(scale(t(x)))
+  head(n)
+  n[n>4]=4 #Set upper limit, values greater than 4 equal to 4
+  n[n< -4]= -4 #Set lower limit, values less than -4 equal to -4
+  head(n)
+  n[1:4,1:4]
+  m<- paste(x,"_ph",sep = "_")
+  m<-pheatmap(n,cluster_rows = T,cluster_cols = F,
+              color=colorRampPalette(c("navy","white","firebrick3"))(100),
+              show_colnames = F,border_color = NA,show_rownames =T,
+              annotation_col = annotation_col,
+              annotation_colors = ann_colors,
+              cutree_row = j, cutree_cols = 5)
+  m
+  return(m)
+}
+
+```
+
+
+```{r,fig.height=25, fig.width=10}
+library(pheatmap)
+
+tdf_test<-ph_cluster_test(df_reordered,12)
+
+```
+
+```{r}
+write.csv(df_reordered,file="suture_mes_mito_MAGIC_OG3_DEG_RNA_matrix.csv",row.names = TRUE)
+```
+However, the above approches were too arbitrary, which lead us to tink whether k-mean cluster will give us more reasonable results.
+
+## 5.3 k-mean
+## 5.3.1 k-mean cluster
+```{r}
+# --- 1. Load necessary packages ---
+# install.packages(c("dplyr", "tidyr", "ggplot2", "factoextra")) # If not installed, uncomment and run
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(factoextra) # For visualization and help with selecting k
+library(stats)     # For kmeans
+
+# --- Assume df_reordered has been loaded into your R environment ---
+df_reordered <- read.csv(file = "suture_mes_mito_MAGIC_OG3_DEG_RNA_matrix.csv")
+# First determine the source of gene names and data columns
+gene_names_source <- NULL
+data_columns <- NULL
+
+# Check if the first column looks like gene names (non-numeric), and subsequent columns are numeric
+if ((is.character(df_reordered[[1]]) || is.factor(df_reordered[[1]])) && all(sapply(df_reordered[, -1, drop = FALSE], is.numeric))) {
+  cat("Method 1: Assume first column is gene names, rest are numeric.\n")
+  gene_names_source <- as.character(df_reordered[[1]]) # Ensure it's character
+  data_columns <- df_reordered[, -1, drop = FALSE]
+} else if (is.character(rownames(df_reordered)) && all(sapply(df_reordered, is.numeric))) {
+  cat("Method 2: Assume row names are gene names, all columns are numeric.\n")
+  gene_names_source <- rownames(df_reordered)
+  data_columns <- df_reordered
+} else {
+   # Try a more general approach: first column is gene names, try to convert other columns
+   if (is.character(df_reordered[[1]]) || is.factor(df_reordered[[1]])) {
+       cat("Method 3: Assume first column is gene names, try to convert rest to numeric.\n")
+       gene_names_source <- as.character(df_reordered[[1]])
+       # Try to convert
+       data_columns_temp <- df_reordered[, -1, drop = FALSE]
+       # Use lapply to convert, handle possible non-numeric column errors
+       df_numeric_list <- lapply(data_columns_temp, function(col) {
+           suppressWarnings(as.numeric(as.character(col))) # Convert to character then numeric, handle factors etc
+       })
+       data_columns <- as.data.frame(df_numeric_list)
+
+       # Check是否所有列都成功转为数值 (没有全是 NA 的列)
+       all_numeric <- all(sapply(data_columns, is.numeric))
+       if (!all_numeric) {
+           warning("Not all non-gene name columns could be successfully converted to numeric.")
+       }
+   } else {
+        stop("Unable to automatically determine gene name column or all columns are already numeric. Please Check df_reordered structure.")
+   }
+}
+
+# CheckExtract的基因名
+if (is.null(gene_names_source) || is.null(data_columns)) {
+    stop("Failed to successfully separate gene names and data columns.")
+}
+
+print("Preliminary check gene name source:")
+print(paste("Number of potential gene names:", length(gene_names_source)))
+print(paste("Number of rows in data columns:", nrow(data_columns)))
+if (length(gene_names_source) != nrow(data_columns)) {
+    stop("After extraction, gene name count does not match data row count, please check original data structure.")
+}
+
+print("Check duplicates in gene name source:")
+if (any(duplicated(gene_names_source))) {
+  warning("基因名源中发现Duplicate项!")
+  print(head(gene_names_source[duplicated(gene_names_source)]))
+  # 在这里决定如何处理，例如停止或使用 make.unique
+  # gene_names_source <- make.unique(gene_names_source)
+  # cat("已使用 make.unique 处理Duplicate基因名。\n")
+  stop("Detect到Duplicate基因名，请处理后再运行。")
+}
+
+print("Check NA values in gene name source:")
+if (any(is.na(gene_names_source))) {
+  warning("基因名源中发现NA值!")
+  # 在这里决定如何处理，例如停止或Remove这些行
+  stop("Detect到NA基因名，请处理后再运行。")
+}
+
+# 现在 data_columns 应该是只包含（尝试转换后）数值列的数据框
+df_numeric <- data_columns
+
+# Final check and set row names
+if (length(gene_names_source) == nrow(df_numeric)) {
+  rownames(df_numeric) <- gene_names_source
+  cat("成功设置行名。\n")
+} else {
+  # 这一步Theory上should notoccur，becausepreviousalreadyCheckonce了，but asfinalinsurance
+  stop(paste("最终错误：基因名数量 (", length(gene_names_source),
+             ") 与最终数据框行数 (", nrow(df_numeric),
+             ") 不匹配。"))
+}
+
+# --- nextcode（CheckNA，calculatemean等）---
+
+# Check转换过程中是否引入NA
+if (any(is.na(df_numeric))) {
+  warning("在转换为数值数据的过程中引入了NA值。可能是原始数据包含非数值字符。")
+  # 可以选择Remove包含NA的行或列，或进行插值等
+  na_rows <- apply(df_numeric, 1, function(row) any(is.na(row)))
+  if(any(na_rows)) {
+      cat("Remove了", sum(na_rows), "行，because它们包含NA值。\n")
+      df_numeric <- df_numeric[!na_rows, , drop = FALSE]
+      # EnsureRemove后还有数据
+       if(nrow(df_numeric) == 0) {
+           stop("所有行都因包含NA值而被Remove，无法继续。")
+       }
+  }
+}
+
+# 确认最终的 df_numeric 结构
+print("最终 df_numeric 的维度:")
+print(dim(df_numeric))
+print("最终 df_numeric 的行名示例:")
+print(head(rownames(df_numeric)))
+print("最终 df_numeric 的数据示例:")
+print(head(df_numeric[, 1:min(ncol(df_numeric), 5)])) # 显示前几列
+
+
+
+# --- 2. 准备数据 - calculate组平mean ---
+# Define组名和样本数量（用于验证，但主要通过列名识别）
+group_info <- list(
+  WT_PF = 248, WT_SAG = 357, Runx2_PF = 284, Runx2_SAG = 61,
+  KO_PF = 191, KO_SAG = 545, DM_PF = 129, DM_SAG = 268
+)
+group_names <- names(group_info)
+
+# 创建一个空的列表来存储每个组的平mean
+group_means_list <- list()
+
+# 遍历每个组名
+for (group in group_names) {
+  # 找到属于该组的列名 (使用 startsWith 或 grep)
+  group_cols <- grep(paste0("^", group, "_"), colnames(df_numeric), value = TRUE)
+
+  if (length(group_cols) > 0) {
+    # calculate每个基因在这些列上的平mean (rowMeans)
+    group_means_list[[group]] <- rowMeans(df_numeric[, group_cols, drop = FALSE], na.rm = TRUE)
+  } else {
+    warning(paste("未找到组", group, "的任何列。"))
+  }
+}
+
+# 将列表转换为数据框
+df_means <- as.data.frame(do.call(cbind, group_means_list))
+
+# Checkcalculate后的平mean数据框
+print("每个基因在各组中的平均表达量:")
+head(df_means)
+print(dim(df_means))
+
+# --- 3. 数据标准化 ---
+# 对每个基因（行）进行 Z-score 标准化
+# scale() function默认按列标准化，所以需要转置 -> 标准化 -> 再转置回来
+df_means_scaled <- t(scale(t(df_means)))
+
+# Check是否有because方差为0而产生的NaN值
+if(any(is.nan(df_means_scaled))) {
+    warning("标准化后产生NaN值（可能是because某些基因在所有组中表达恒定）。正在Remove这些基因。")
+    genes_to_keep <- rownames(df_means_scaled)[apply(df_means_scaled, 1, function(x) !any(is.nan(x)))]
+    df_means_scaled <- df_means_scaled[genes_to_keep, , drop = FALSE]
+    df_means <- df_means[genes_to_keep, , drop = FALSE] # 同时更新未标准化的数据
+    if(nrow(df_means_scaled) == 0) {
+      stop("所有行在标准化后都包含NaN值，无法继续。")
+    }
+}
+
+# Check标准化后的数据
+print("标准化后的平均表达量:")
+head(df_means_scaled)
+desired_column_order <- c("WT_PF", "Runx2_PF", "KO_PF", "DM_PF",
+                          "WT_SAG", "Runx2_SAG", "KO_SAG", "DM_SAG")
+df_means_scaled <- df_means_scaled[, desired_column_order, drop = FALSE]
+head(df_means_scaled)
+write.csv(df_means_scaled, file = "suture_mes_mito_MAGIC_OG3_DEG_RNA_normalized.csv",row.names = FALSE)
+```
+```{r}
+# --- 4. 确定最佳聚类数目 (k) ---
+# 使用 Elbow Method 和 Silhouette Method
+# 注意：对于大型数据集，这可能需要一些时间
+
+# 设置最大尝试的k值 (可以根据需要调整)
+max_k <- 15
+```
+
+```{r}
+# 肘部法则
+set.seed(123) # 设置随机种子保证结果可Duplicate
+elbow_plot <- fviz_nbclust(df_means_scaled, kmeans, method = "wss", k.max = max_k) +
+   labs(subtitle = "Elbow method")
+ print(elbow_plot)
+
+# 轮廓系数法
+# set.seed(123)
+silhouette_plot <- fviz_nbclust(df_means_scaled, kmeans, method = "silhouette", k.max = max_k) + labs(subtitle = "Silhouette method")
+
+print(silhouette_plot)
+```
+
+```{r}
+# 根据上面的图示选择一个合适的 k 值。例如，肘部法则中曲线斜率变化最显著的点，
+# 或者轮廓系数法中平均轮廓宽度最高的点。
+# 假设我们根据图形选择 k = 4 (请根据您的实际图形调整)
+optimal_k <- 10 # <--- 请根据实际分析结果修改此值!
+
+cat(paste("根据图示分析，选择 k =", optimal_k, "\n"))
+
+# --- 5. 执行 K-means 聚类 ---
+set.seed(123) # 保证结果可Duplicate
+kmeans_result <- kmeans(df_means_scaled, centers = optimal_k, nstart = 25) # nstart 增加稳定性
+
+# 查看聚类结果摘要
+print(kmeans_result)
+
+# 将聚类结果添加到原始平mean数据框（或标准化数据框）
+df_means$cluster <- kmeans_result$cluster
+df_means_scaled_with_cluster <- as.data.frame(df_means_scaled)
+df_means_scaled_with_cluster$cluster <- kmeans_result$cluster
+
+# 查看每个簇有多少基因
+cat("每个簇的基因数量:\n")
+print(table(df_means$cluster))
+write.csv(df_means_scaled_with_cluster,file = "suture_mes_mito_MAGIC_OG3_DEG_RNA_clustered_10.csv",row.names = TRUE )
+
+```
+
+```{r}
+# --- 6. 结果可视化 (修改后，EnsureX轴按指定顺序排列) ---
+
+# --- 首先，Define您期望的X轴顺序 ---
+# 这个向量包含了您希望在X轴上看到的组名及其顺序
+desired_group_order <- c("WT_PF", "Runx2_PF", "KO_PF", "DM_PF",
+                         "WT_SAG", "Runx2_SAG", "KO_SAG", "DM_SAG")
+
+# --- 从输入数据框获取实际的组名列 ---
+# 假设 df_means_scaled_with_cluster 是您already排好列顺序，并包含 'cluster' 列的数据框
+# 我们需要找出哪些列是实际的组表达量数据
+# (通过排除 'gene' 列（If存在）和 'cluster' 列来实现)
+group_columns_to_pivot <- setdiff(colnames(df_means_scaled_with_cluster), "cluster")
+# If您的数据框此时还没有 'gene' 列（基因名仍在行名中），则无需排除 'gene'
+# Ifalready有了 'gene' 列，则需要排除:
+if ("gene" %in% colnames(df_means_scaled_with_cluster)) {
+  group_columns_to_pivot <- setdiff(group_columns_to_pivot, "gene")
+}
+
+# --- Check一下，Ensure我们识别的列与期望顺序中的名称一致 ---
+# （这一步是可选的，但有助于防止因列名不匹配引起的错误）
+if (!all(desired_group_order %in% group_columns_to_pivot) ||
+    !all(group_columns_to_pivot %in% desired_group_order)) {
+      warning(paste("警告: 您期望的组顺序 (desired_group_order) 中的名称与",
+                    "df_means_scaled_with_cluster 中找到的组列不完全匹配。",
+                    "绘图将只包含在两者中都存在的组，并按 desired_group_order 排序。"))
+      # Ensure只使用数据中实际存在的列，并按期望顺序排列
+      group_columns_to_pivot <- intersect(desired_group_order, group_columns_to_pivot)
+} else {
+    # If完全匹配，Ensure我们用于 pivot 的列顺序与 desired_group_order 一致
+    # （虽然 pivot_longer 不依赖列顺序，但这样做更清晰）
+    group_columns_to_pivot <- desired_group_order
+}
+
+
+# --- 将数据转换为长格式，方便 ggplot 绘图 ---
+df_plot_data <- df_means_scaled_with_cluster %>%
+  # If基因名还在行名中，则将其转换为 'gene' 列
+  # Ifalready有 'gene' 列了，这步会报错，可以注释掉或用 if 判断
+  # 假设此时还没有 'gene' 列：
+  tibble::rownames_to_column("gene") %>%
+  # 选择所有识别出的组表达量列进行转换
+  pivot_longer(cols = all_of(group_columns_to_pivot), # 使用 all_of Ensure列名存在
+               names_to = "group",
+               values_to = "scaled_expression") %>%
+  # *** 修改的关键：使用 desired_group_order 设置因子水平 ***
+  mutate(group = factor(group, levels = desired_group_order))
+
+# --- Check因子水平是否已按期望设置 ---
+cat("绘图数据'group'列的因子水平 (应按desired_group_order排列):\n")
+print(levels(df_plot_data$group))
+
+# --- 绘制每个簇的基因表达趋势（标准化后） ---
+# Ensure optimal_k 变量存在并且是您选择的 k 值 (例如 2 或 3)
+# If它不存在，请先Define它，例如： optimal_k <- 2
+if (!exists("optimal_k")) {
+  warning("变量 'optimal_k' 未Define。绘图标题中的 k 值将显示为 NA。请先设置 optimal_k。")
+  optimal_k <- NA # 设置一个默认值以避免错误
+}
+
+cluster_trend_plot <- ggplot(df_plot_data, aes(x = group, y = scaled_expression, group = gene)) +
+  geom_line(alpha = 0.1, color = "grey") + # 绘制每个基因的线
+  stat_summary(aes(group = 1), fun = mean, geom = "line", color = "red", size = 1) + # 绘制簇的平均趋势线
+  facet_wrap(~ cluster, scales = "free_y") + # 按簇分面
+  theme_minimal() +
+  labs(
+    title = "Gene Expression Trends by Cluster (Scaled)",
+    x = "Sample Group (Custom Order)", # 更新X轴标题
+    y = "Scaled Mean Expression (Z-score)",
+    caption = paste("K-means clustering with k =", optimal_k)
+  ) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8)) # 调整角度防止标签重叠
+
+print(cluster_trend_plot)
+
+# （可选）保存图表
+ggsave("gene_cluster_trends_custom_order.pdf", plot = cluster_trend_plot, width = 11, height = 8)
+
+# （可选）获取每个簇中的基因列表
+# Ensure使用的数据与聚类时一致，并且行顺序匹配
+# 假设 df_means_scaled_with_cluster 是通过 df_means_scaled 添加 cluster 列得到的
+if(exists("df_means_scaled") && nrow(df_means_scaled) == nrow(df_means_scaled_with_cluster) && all(rownames(df_means_scaled) == rownames(df_means_scaled_with_cluster))) {
+    cluster_gene_list <- split(rownames(df_means_scaled), df_means_scaled_with_cluster$cluster)
+    # print(head(cluster_gene_list[[1]])) # 打印第一个簇的部分基因
+} else if (exists("df_means") && nrow(df_means) == nrow(df_means_scaled_with_cluster) && all(rownames(df_means) == rownames(df_means_scaled_with_cluster))) {
+     cluster_gene_list <- split(rownames(df_means), df_means_scaled_with_cluster$cluster)
+     # print(head(cluster_gene_list[[1]]))
+} else {
+    warning("无法找到与 df_means_scaled_with_cluster 行顺序一致的 df_means 或 df_means_scaled 用于Extract基因列表。")
+    cluster_gene_list <- list() # 创建空列表以避免后续错误
+}
+
+
+# （可选）将带有聚类结果的数据框保存到文件
+# 注意：If df_means_scaled_with_cluster 中没有 'gene' 列（基因名仍在行名中），
+# write.csv 可能需要添加 row.names=TRUE 参数，或者先添加 'gene' 列。
+write.csv(df_means_scaled_with_cluster, file = "gene_expression_scaled_means_with_clusters.csv")
+```
+
+```{r,save cluster information}
+
+# 1. 创建一个包含基因名和聚类编号的新数据框
+#    注意：将行名转换为名为 "Gene" 的列
+#    将 'cluster' 列重命名为 "Cluster" 以匹配后续读取code
+cluster_info_to_save <- data.frame(
+  Gene = rownames(df_means_scaled_with_cluster),
+  Cluster = df_means_scaled_with_cluster$cluster
+)
+
+# 2. Define输出 CSV 文件名
+csv_filename <- "suture_mes_mito_MAGIC_OG3_DEG_clusterinfo_10.csv"
+
+# 3. 将数据框写入 CSV 文件
+#    row.names = FALSE 避免将数据框的行号（1, 2, 3...）写入文件
+#    quote = FALSE 通常在这种简单文件中是可选的，但有时能避免不必要的引号
+write.csv(cluster_info_to_save, file = csv_filename, row.names = FALSE, quote = FALSE)
+
+cat(paste("Cluster information successfully saved to:", csv_filename, "\n"))
+```
+
+## 5.3.2 avg cluster
+
+```{r}
+# --- 1. Install/Load Packages ---
+# install.packages("pheatmap")
+# install.packages("RColorBrewer") # For cluster colors (optional)
+library(pheatmap)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(RColorBrewer) # Optional: for nice cluster colors
+
+# --- Assuming df_plot_data exists from previous steps ---
+# Verify structure: should have gene, cluster, group, scaled_expression
+print("Input data (df_plot_data) head:")
+head(df_plot_data)
+
+# --- 2. Define Group Order and Colors ---
+desired_group_order <- c("WT_PF","Runx2_PF","KO_PF","DM_PF",
+                         "WT_SAG","Runx2_SAG","KO_SAG","DM_SAG")
+
+groupcolor <- c("#FF5733","#FFC300","#FF4081","#7B1FA2",
+                '#4CAF50','#2196F3','#795548','#2C427E')
+names(groupcolor) <- desired_group_order # Ensure names match the desired order
+
+# --- 3. Define Heatmap Body Color Scale ---
+heatmap_colors <- colorRampPalette(c("navy", "white", "firebrick3"))(100)
+
+# --- 4. Reshape Data to Wide Matrix ---
+# We need a matrix where rows are genes and columns are groups
+
+# First, ensure df_plot_data only contains the groups we want in the desired order
+df_plot_data_filtered <- df_plot_data %>%
+    filter(group %in% desired_group_order) %>%
+    # This step ensures the 'group' factor levels are correct before pivoting
+    mutate(group = factor(group, levels = desired_group_order))
+
+# Pivot to wide format
+heatmap_matrix_df <- df_plot_data_filtered %>%
+  select(gene, group, scaled_expression) %>% # Keep only necessary columns
+  pivot_wider(names_from = group, values_from = scaled_expression)
+
+# Convert to matrix and set row names
+heatmap_matrix <- as.matrix(heatmap_matrix_df %>% column_to_rownames("gene"))
+
+# Verify matrix dimensions and column order
+print("Dimensions of heatmap matrix:")
+print(dim(heatmap_matrix)) # Should be [number_of_genes x 8]
+print("Column names of heatmap matrix (should match desired order):")
+print(colnames(heatmap_matrix)) # Should be WT_PF, Runx2_PF, ..., DM_SAG
+
+# --- 5. Prepare Row Annotation (Clusters) ---
+# Get unique gene-cluster mapping
+row_annotation_df <- df_plot_data %>%
+  select(gene, cluster) %>%
+  distinct() %>%
+  # Ensure it's sorted in the same order as the matrix rows will be
+  arrange(cluster, gene) %>%
+  # Set row names to gene for matching with the matrix
+  column_to_rownames("gene") %>%
+  # Convert cluster to factor for coloring purposes
+  mutate(cluster = factor(cluster))
+
+# --- 6. Sort the Matrix Rows based on Cluster ---
+# Ensure the matrix rows are in the same order as the row annotation (sorted by cluster, then gene)
+heatmap_matrix_sorted <- heatmap_matrix[rownames(row_annotation_df), , drop = FALSE]
+
+# Verify sorting
+# print(head(rownames(heatmap_matrix_sorted)))
+# print(head(rownames(row_annotation_df)))
+
+# --- 7. Prepare Column Annotation (Groups) ---
+col_annotation_df <- data.frame(Group = factor(colnames(heatmap_matrix_sorted), levels = desired_group_order))
+rownames(col_annotation_df) <- colnames(heatmap_matrix_sorted)
+
+# --- 8. Define Annotation Colors ---
+# Assign colors to clusters (adjust if you have more/fewer clusters than Brewer palettes support)
+num_clusters <- nlevels(row_annotation_df$cluster)
+# Use a Brewer palette (e.g., Set1, Set2, Paired) or create manually
+if (num_clusters <= 9 && num_clusters >= 3) {
+    cluster_colors_palette <- brewer.pal(num_clusters, "Set1")
+} else if (num_clusters > 9) {
+    # If more than 9 clusters, Brewer palettes might repeat; use a different method or palette
+    # Using rainbow as an example for many clusters
+    cluster_colors_palette <- rainbow(num_clusters)
+} else { # Handle cases with 1 or 2 clusters
+    cluster_colors_palette <- brewer.pal(max(3, num_clusters), "Set1")[1:num_clusters]
+}
+cluster_colors <- cluster_colors_palette
+names(cluster_colors) <- levels(row_annotation_df$cluster)
+
+
+# Create the list for pheatmap
+annotation_colors_list <- list(
+  Group = groupcolor,      # From user input
+  cluster = cluster_colors # Defined above
+)
+
+# --- 9. Calculate Gaps for Separating Clusters ---
+# Find where the cluster changes in the sorted row annotation
+cluster_changes <- which(diff(as.numeric(row_annotation_df$cluster)) != 0)
+# cluster_changes will be the row indices *before* the change occurs
+
+# --- 10. Plot Heatmap ---
+# It's often best *not* to show rownames if there are many genes
+pheatmap_plot <- pheatmap(
+  heatmap_matrix_sorted,
+  color = heatmap_colors,
+  annotation_row = row_annotation_df,
+  annotation_col = col_annotation_df,
+  annotation_colors = annotation_colors_list,
+  cluster_rows = FALSE, # We already sorted rows by cluster
+  cluster_cols = FALSE, # We want columns in our desired order
+  show_rownames = FALSE, # Set to TRUE if you have few genes
+  show_colnames = TRUE,
+  gaps_row = cluster_changes, # Add lines between clusters
+  border_color = "grey60", # Optional: adds cell borders
+  main = "Gene Expression Heatmap by Cluster" # Optional: add a title
+  # You might need to adjust scale="row" or scale="none" depending on your data
+  # Since data is already scaled (df_means_scaled), use scale="none" (default)
+)
+
+# If you need to save the plot, pheatmap usually draws directly.
+# You might need to wrap it in png(), pdf() etc.
+pdf("suture_mes_mito_MAGIC_OG3_DEG_avg_heatmap.pdf", width = 8, height = 10)
+pheatmap(
+  heatmap_matrix_sorted,
+  color = heatmap_colors,
+  annotation_row = row_annotation_df,
+  annotation_col = col_annotation_df,
+  annotation_colors = annotation_colors_list,
+  cluster_rows = FALSE, # We already sorted rows by cluster
+  cluster_cols = FALSE, # We want columns in our desired order
+  show_rownames = FALSE, # Set to TRUE if you have few genes
+  show_colnames = TRUE,
+  gaps_row = cluster_changes, # Add lines between clusters
+  border_color = "grey60", # Optional: adds cell borders
+  main = "Gene Expression Heatmap by Cluster" # Optional: add a title
+  # You might need to adjust scale="row" or scale="none" depending on your data
+  # Since data is already scaled (df_means_scaled), use scale="none" (default)
+)
+dev.off()
+
+print("Heatmap generation complete.")
+
+# The plot object `pheatmap_plot` can sometimes be used, but pheatmap often draws directly.
+```
+
+
+##5.3.3 scRNA heatmap
+```{r}
+# --- 0. 清理环境（可选） ---
+rm(list = ls())
+
+# --- 1. 加载必要的库 ---
+# install.packages(c("pheatmap", "dplyr", "tibble", "RColorBrewer")) # If未安装，取消注释并运行
+library(pheatmap)
+library(dplyr)
+library(tibble)
+library(RColorBrewer)
+
+cat("--- Script Start ---\n")
+loaded_assignments_df <- read.csv("suture_mes_mito_MAGIC_OG3_DEG_clusterinfo_10.csv", stringsAsFactors = FALSE)
+# If需要恢复成命名向量：
+gene_cluster_map <- setNames(loaded_assignments_df$Cluster, loaded_assignments_df$Gene)
+print(head(gene_cluster_map))
+# --- 2. 加载并准备原始表达数据 ---
+file_path <- "suture_mes_mito_MAGIC_OG3_DEG_RNA_matrix.csv" # Ensure文件路径正确
+cat(paste("Loading data from:", file_path, "\n"))
+if (!file.exists(file_path)) {
+  stop("Error: Input CSV file not found at specified path.")
+}
+# 读取数据: 指定第 1 列作为行名
+df_reordered_raw <- read.csv(
+    file = file_path,
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    check.names = FALSE,
+    row.names = 1 # Use first column from CSV as row names
+    )
+
+cat("--- Initial Data Check (after loading with row.names=1) ---\n")
+print(paste("Class:", class(df_reordered_raw)))
+print(paste("Dimensions:", paste(dim(df_reordered_raw), collapse=" x ")))
+print("Head of Rownames (should be gene names):")
+print(head(rownames(df_reordered_raw)))
+print("Head of first 5 columns:")
+print(head(df_reordered_raw[, 1:min(5, ncol(df_reordered_raw))]))
+
+# --- 3. Ensure数据是数值矩阵 ---
+cat("Preparing numeric matrix...\n")
+if (all(sapply(df_reordered_raw, is.numeric))) {
+    df_ready_for_scaling <- as.matrix(df_reordered_raw)
+    cat("All columns numeric. Converted data frame to matrix.\n")
+} else {
+    warning("Some data columns were not numeric. Attempting conversion...")
+    original_rownames <- rownames(df_reordered_raw)
+    df_ready_for_scaling <- suppressWarnings(as.matrix(sapply(df_reordered_raw, function(x) as.numeric(as.character(x)))))
+    rownames(df_ready_for_scaling) <- original_rownames
+    if(!is.numeric(df_ready_for_scaling)) stop("Failed to convert non-numeric columns.")
+    # Check for NA rows resulting from conversion
+    rows_all_na <- apply(df_ready_for_scaling, 1, function(r) all(is.na(r)))
+     if(any(rows_all_na)){
+         warning("Removing rows that became all NA after numeric conversion.")
+         df_ready_for_scaling <- df_ready_for_scaling[!rows_all_na, , drop=FALSE]
+         if(nrow(df_ready_for_scaling) == 0) stop("All rows became NA after conversion.")
+     }
+    cat("Converted columns to numeric and created matrix.\n")
+}
+# Check最终准备好的矩阵
+cat("--- Prepared Matrix Check (df_ready_for_scaling) ---\n")
+print(paste("Class:", class(df_ready_for_scaling)))
+print(paste("Dimensions:", paste(dim(df_ready_for_scaling), collapse=" x ")))
+print("Row names head:")
+print(head(rownames(df_ready_for_scaling))) # 应该显示基因名
+
+
+# --- 4. Z-score standardization and upper/lower limit setting (with name protection) ---
+cat("\n--- Applying Z-score Scaling and Capping ---\n")
+x_matrix <- df_ready_for_scaling
+
+# 保存原始名称
+original_rownames <- rownames(x_matrix)
+original_colnames <- colnames(x_matrix)
+if(is.null(original_rownames) || length(original_rownames) != nrow(x_matrix)) stop("Invalid row names before scaling.")
+cat("Saved original row/column names.\n")
+
+# 执行缩放
+cat("Performing row-wise Z-score scaling...\n")
+scaled_matrix_values <- t(scale(t(x_matrix)))
+
+# Check维度
+if(!identical(dim(scaled_matrix_values), dim(x_matrix))) stop("Dimension mismatch after scaling.")
+
+# 恢复名称
+rownames(scaled_matrix_values) <- original_rownames
+colnames(scaled_matrix_values) <- original_colnames
+scaled_matrix <- scaled_matrix_values
+cat("Restored names after scaling.\n")
+
+# Check并处理 NaN (零方差行)
+nan_rows_mask <- apply(scaled_matrix, 1, function(row) any(is.nan(row)))
+valid_genes_after_scaling <- rownames(scaled_matrix)[!nan_rows_mask] # 获取有效基因名
+if (any(nan_rows_mask)) {
+  num_nan_rows <- sum(nan_rows_mask)
+  warning(sprintf("Removing %d rows with zero variance during scaling (resulted in NaN).", num_nan_rows))
+  scaled_matrix <- scaled_matrix[!nan_rows_mask, , drop = FALSE]
+  if(nrow(scaled_matrix) == 0) stop("All rows removed due to zero variance.")
+  valid_genes_after_scaling <- rownames(scaled_matrix) # 更新有效基因列表
+  cat("NaN rows removed. Remaining dimensions:", paste(dim(scaled_matrix), collapse=" x "), "\n")
+} else { cat("No rows with zero variance found during scaling.\n") }
+
+# 应用 Capping
+cap_limit <- 4
+scaled_matrix[scaled_matrix > cap_limit] <- cap_limit
+scaled_matrix[scaled_matrix < -cap_limit] <- -cap_limit
+heatmap_matrix_prepared <- scaled_matrix
+cat("Capping applied.\n")
+
+cat("--- Matrix Check After Scaling/Capping ---\n")
+print(paste("Dimensions:", paste(dim(heatmap_matrix_prepared), collapse=" x ")))
+print("Row names head:")
+print(head(rownames(heatmap_matrix_prepared))) # 应该还是基因名
+
+
+# --- 5. 准备行注释 (获取聚类信息) ---
+cat("\n--- Preparing Row Annotation (Cluster Info) ---\n")
+# !!! Placeholder: 需要提供 gene -> cluster 映射关系 !!!
+# 假设映射存储在 'gene_cluster_map' (命名向量: names=基因名, values=cluster号)
+# ----------------------------------------------------------
+# 示例: 尝试从可能存在的变量生成映射 (请根据您的实际情况修改)
+if (!exists("gene_cluster_map")) {
+    if (exists("df_means_scaled") && exists("optimal_k")) {
+         cat("Cluster map not found. Re-running k-means on df_means_scaled with optimal_k =", optimal_k, "...\n")
+         common_genes_for_kmeans <- intersect(rownames(df_means_scaled), rownames(heatmap_matrix_prepared))
+         if (length(common_genes_for_kmeans) < optimal_k) stop("Not enough common genes between df_means_scaled and prepared matrix for k-means.")
+         df_means_scaled_subset <- df_means_scaled[common_genes_for_kmeans, ]
+         set.seed(123)
+         kmeans_result_placeholder <- kmeans(df_means_scaled_subset, centers = optimal_k, nstart = 25)
+         gene_cluster_map <- kmeans_result_placeholder$cluster # 获取命名向量
+         warning("Used k-means result based on 'df_means_scaled' and 'optimal_k'.")
+    } else {
+         stop("Error: Need gene-to-cluster mapping. Please provide 'gene_cluster_map' (named vector: names=genes, values=clusters).")
+         # # 虚拟数据示例 (用于测试):
+         # warning("Creating DUMMY cluster assignments for testing.")
+         # optimal_k <- 4
+         # gene_cluster_map <- setNames(sample(1:optimal_k, nrow(heatmap_matrix_prepared), replace = TRUE), rownames(heatmap_matrix_prepared))
+    }
+}
+# ----------------------------------------------------------
+
+# Ensure gene_cluster_map 包含 heatmap_matrix_prepared 中的基因
+genes_in_matrix <- rownames(heatmap_matrix_prepared)
+genes_in_map <- names(gene_cluster_map)
+common_genes_annot <- intersect(genes_in_matrix, genes_in_map)
+if(length(common_genes_annot) == 0) stop("No common genes between matrix and cluster map.")
+if(length(common_genes_annot) < length(genes_in_matrix)){
+    warning("Some genes in the matrix are missing from the cluster map. They will be excluded from the heatmap.")
+    heatmap_matrix_prepared <- heatmap_matrix_prepared[common_genes_annot, , drop=FALSE] # 过滤矩阵
+}
+
+# 创建行注释数据框
+row_annotation_df <- data.frame(
+  row.names = common_genes_annot, # Ensure行名是基因
+  cluster = factor(gene_cluster_map[common_genes_annot]) # Extract对应基因的cluster，设为因子
+)
+
+# 排序行注释 (按 cluster, 再按 gene name)
+cat("Sorting rows by cluster...\n")
+row_order_indices <- order(row_annotation_df$cluster, rownames(row_annotation_df))
+row_annotation_df_sorted <- row_annotation_df[row_order_indices, , drop = FALSE]
+
+
+# --- 6. 排序矩阵行 ---
+heatmap_matrix_sorted_rows <- heatmap_matrix_prepared[rownames(row_annotation_df_sorted), , drop = FALSE]
+
+
+# --- 7. 准备列注释并排序矩阵列 ---
+cat("Preparing column annotation and sorting columns...\n")
+desired_group_order <- c("WT_PF","Runx2_PF","KO_PF","DM_PF",
+                         "WT_SAG","Runx2_SAG","KO_SAG","DM_SAG")
+groupcolor <- c(WT_PF="#FF5733", Runx2_PF="#FFC300", KO_PF="#FF4081", DM_PF="#7B1FA2",
+                WT_SAG='#4CAF50', Runx2_SAG='#2196F3', KO_SAG='#795548', DM_SAG='#2C427E')
+if(!identical(names(groupcolor), desired_group_order)) warning("Names of groupcolor do not match desired_group_order!")
+
+# Extract组名
+sample_names <- colnames(heatmap_matrix_sorted_rows)
+group_mapping <- gsub("_\\d+$", "", sample_names)
+if (!all(group_mapping %in% desired_group_order)) warning("Some sample names did not map to expected groups.")
+
+# 创建列注释 DF
+col_annotation_df <- data.frame(Group = factor(group_mapping, levels = desired_group_order))
+rownames(col_annotation_df) <- sample_names
+
+# 按组排序样本列
+ordered_sample_indices <- order(factor(group_mapping, levels = desired_group_order))
+ordered_sample_names <- sample_names[ordered_sample_indices]
+
+# 排序矩阵列和列注释
+heatmap_matrix_final <- heatmap_matrix_sorted_rows[, ordered_sample_names, drop = FALSE]
+col_annotation_df_ordered <- col_annotation_df[ordered_sample_names, , drop = FALSE]
+
+
+# --- 8. Define注释颜色 ---
+cat("Defining annotation colors...\n")
+num_clusters <- nlevels(row_annotation_df_sorted$cluster)
+# 生成或获取 cluster 颜色
+if (!exists("cluster_colors") || length(cluster_colors) != num_clusters) {
+    if (num_clusters <= 9 && num_clusters >=3) { cluster_colors_palette <- brewer.pal(num_clusters, "Set1") }
+    else if (num_clusters > 9) { cluster_colors_palette <- rainbow(num_clusters) }
+    else { cluster_colors_palette <- brewer.pal(max(3, num_clusters), "Set1")[1:num_clusters] }
+    cluster_colors <- cluster_colors_palette
+    names(cluster_colors) <- levels(row_annotation_df_sorted$cluster)
+}
+
+annotation_colors_list <- list(
+  Group = groupcolor, # 使用之前Define的 groupcolor
+  cluster = cluster_colors
+)
+
+
+# --- 9. calculate Gaps ---
+cat("Calculating gaps...\n")
+row_gaps <- which(diff(as.numeric(row_annotation_df_sorted$cluster)) != 0)
+col_gaps <- which(diff(as.numeric(col_annotation_df_ordered$Group)) != 0)
+
+
+# --- 10. 生成 Heatmap ---
+cat("Generating heatmap... This may take time.\n")
+heatmap_body_colors <- colorRampPalette(c("navy", "white", "firebrick3"))(100)
+
+# 确定是否显示行/列名 (样本/基因数太多时建议不显示)
+show_row_names <- nrow(heatmap_matrix_final) <= 50 # 例如，少于50个基因时显示
+show_col_names <- ncol(heatmap_matrix_final) <= 100 # 例如，少于100个样本时显示
+
+pheatmap_plot <- pheatmap(
+  heatmap_matrix_final,
+  color = heatmap_body_colors,
+  annotation_row = row_annotation_df_sorted,
+  annotation_col = col_annotation_df_ordered,
+  annotation_colors = annotation_colors_list,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  show_rownames = show_row_names,
+  show_colnames = show_col_names,
+  gaps_row = row_gaps,
+  gaps_col = col_gaps,
+  border_color = NA, # 可设为 "grey60"
+  main = "Gene Expression Heatmap (Z-score Scaled & Capped) by Cluster",
+  fontsize = 8,
+  fontsize_row = if(show_row_names) 7 else 8, # 仅在显示时调整
+  fontsize_col = if(show_col_names) 7 else 8  # 仅在显示时调整
+)
+
+# 绘图对象通常由 pheatmap 直接渲染，保存需要特定方式
+# print(pheatmap_plot) # 可能不直接显示，但会触发绘图
+
+cat("--- Script End ---\n")
+
+# --- 保存方法 ---
+# 方法1: 使用 ggsave (If pheatmap 返回 ggplot 对象，较新版本可能返回 grob)
+# library(ggplot2)
+# ggsave("Final_Heatmap.pdf", plot = pheatmap_plot, width = 10, height = 12) # 可能需要调整
+
+# 方法2: 使用 pdf()/png() 设备
+pdf("suture_mes_mito_MAGIC_OG3_DEG_cluster_Heatmap_10.pdf", width = 10, height = 12)
+pheatmap(
+  heatmap_matrix_final,
+  color = heatmap_body_colors,
+  annotation_row = row_annotation_df_sorted,
+  annotation_col = col_annotation_df_ordered,
+  annotation_colors = annotation_colors_list,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  show_rownames = show_row_names,
+  show_colnames = show_col_names,
+  gaps_row = row_gaps,
+  gaps_col = col_gaps,
+  border_color = NA, # 可设为 "grey60"
+  main = "Gene Expression Heatmap (Z-score Scaled & Capped) by Cluster",
+  fontsize = 8,
+  fontsize_row = if(show_row_names) 7 else 8, # 仅在显示时调整
+  fontsize_col = if(show_col_names) 7 else 8  # 仅在显示时调整
+)
+dev.off()
+```
+
+
+## 5.3.4 Heatmap for cluster6
+Average expression trend in cluster 6 fit with the differnet trend as we observed for different cell percentage 
+```{r}
+# --- 0. 清理环境（可选） ---
+# rm(list = ls())
+
+# --- 1. 加载必要的库 ---
+library(pheatmap)
+library(dplyr)
+library(tibble)
+library(RColorBrewer)
+
+cat("--- Script Start ---\n")
+
+# --- !! Define Genes of Interest !! ---
+gene_of_interest <- c("mt-Co1", "mt-Co2","mt-Co3", "mt-Atp6", "mt-Cytb", "mt-Nd4","Serpinf1","Snhg18", "Cdk8")
+if (!exists("gene_of_interest") || !is.character(gene_of_interest) || length(gene_of_interest) == 0) {
+    warning("变量 'gene_of_interest' 未Define或为空。将不标注任何基因。")
+    gene_of_interest <- c()
+} else {
+    cat(paste("Genes to label on heatmap:", paste(gene_of_interest, collapse=", "), "\n"))
+}
+
+# --- 2. 加载并准备原始表达数据 ---
+file_path <- "suture_mes_mito_MAGIC_OG3_DEG_RNA_matrix.csv"
+cat(paste("Loading data from:", file_path, "\n"))
+if (!file.exists(file_path)) stop("Error: Input CSV file not found.")
+df_reordered_raw <- read.csv(file = file_path, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE, row.names = 1)
+cat("Initial Data Check...\n")
+print(paste("Dimensions:", paste(dim(df_reordered_raw), collapse=" x ")))
+
+# --- 3. Ensure数据是数值矩阵 ---
+cat("Preparing numeric matrix...\n")
+if (!all(sapply(df_reordered_raw, is.numeric))) {
+    warning("Some data columns were not numeric. Attempting conversion...")
+    original_rownames <- rownames(df_reordered_raw)
+    df_ready_for_scaling <- suppressWarnings(as.matrix(sapply(df_reordered_raw, function(x) as.numeric(as.character(x)))))
+    rownames(df_ready_for_scaling) <- original_rownames
+    if(!is.numeric(df_ready_for_scaling)) stop("Failed to convert non-numeric columns.")
+    rows_all_na <- apply(df_ready_for_scaling, 1, function(r) all(is.na(r)))
+     if(any(rows_all_na)){
+         warning("Removing rows that became all NA after conversion.")
+         df_ready_for_scaling <- df_ready_for_scaling[!rows_all_na, , drop=FALSE]
+         if(nrow(df_ready_for_scaling) == 0) stop("All rows became NA after conversion.")
+     }
+} else {
+    df_ready_for_scaling <- as.matrix(df_reordered_raw)
+}
+cat("--- Prepared Matrix Check ---\n")
+print(paste("Dimensions:", paste(dim(df_ready_for_scaling), collapse=" x ")))
+
+# --- 4. Z-score standardization and upper/lower limit setting (with name protection) ---
+cat("\n--- Applying Z-score Scaling and Capping ---\n")
+x_matrix <- df_ready_for_scaling
+original_rownames <- rownames(x_matrix)
+original_colnames <- colnames(x_matrix)
+if(is.null(original_rownames) || length(original_rownames) != nrow(x_matrix)) stop("Invalid row names before scaling.")
+cat("Performing row-wise Z-score scaling...\n")
+scaled_matrix_values <- t(scale(t(x_matrix)))
+if(!identical(dim(scaled_matrix_values), dim(x_matrix))) stop("Dimension mismatch after scaling.")
+rownames(scaled_matrix_values) <- original_rownames
+colnames(scaled_matrix_values) <- original_colnames
+scaled_matrix <- scaled_matrix_values
+cat("Restored names after scaling.\n")
+nan_rows_mask <- apply(scaled_matrix, 1, function(row) any(is.nan(row)))
+valid_genes_after_scaling <- rownames(scaled_matrix)[!nan_rows_mask]
+if (any(nan_rows_mask)) {
+  num_nan_rows <- sum(nan_rows_mask)
+  warning(sprintf("Removing %d rows with zero variance (NaN).", num_nan_rows))
+  scaled_matrix <- scaled_matrix[!nan_rows_mask, , drop = FALSE]
+  if(nrow(scaled_matrix) == 0) stop("All rows removed due to zero variance.")
+  valid_genes_after_scaling <- rownames(scaled_matrix)
+} else { cat("No zero variance rows found.\n") }
+cap_limit <- 4
+scaled_matrix[scaled_matrix > cap_limit] <- cap_limit
+scaled_matrix[scaled_matrix < -cap_limit] <- -cap_limit
+heatmap_matrix_prepared <- scaled_matrix
+cat("Capping applied.\n")
+cat("--- Matrix Check After Scaling/Capping ---\n")
+print(paste("Dimensions:", paste(dim(heatmap_matrix_prepared), collapse=" x ")))
+
+
+# --- 5. 准备行注释 & 过滤目标 Cluster ---
+cat("\n--- Preparing Row Annotation and Filtering ---\n")
+# --- 加载或生成 'gene_cluster_map' ---
+loaded_assignments_df <- read.csv("suture_mes_mito_MAGIC_OG3_DEG_clusterinfo_10.csv", stringsAsFactors = FALSE)
+gene_cluster_map <- setNames(loaded_assignments_df$Cluster, loaded_assignments_df$Gene)
+cat("Loaded gene cluster map from file.\n")
+# --- End Loading ---
+
+# --- 设定目标 Cluster ---
+target_cluster <- 6  # *** Ensure这里是你想要的 Cluster ***
+cat(paste("Targeting Cluster:", target_cluster, "\n"))
+
+# 创建包含所有有效基因及其聚类的注释 (与矩阵同步)
+common_genes <- intersect(rownames(heatmap_matrix_prepared), names(gene_cluster_map))
+if(length(common_genes) < nrow(heatmap_matrix_prepared)) {
+    warning("Filtering matrix to genes present in cluster map.")
+    heatmap_matrix_prepared <- heatmap_matrix_prepared[common_genes, , drop=FALSE]
+}
+if(length(common_genes) == 0) stop("No common genes between matrix and cluster map.")
+
+all_row_annotation_df <- data.frame(
+  row.names = common_genes,
+  cluster = factor(gene_cluster_map[common_genes])
+)
+all_row_annotation_df <- na.omit(all_row_annotation_df) # Remove没有 cluster 信息的基因
+heatmap_matrix_prepared <- heatmap_matrix_prepared[rownames(all_row_annotation_df), , drop=FALSE] # 再次同步
+
+# --- 过滤只保留目标 Cluster ---
+row_annotation_target <- all_row_annotation_df %>%
+    filter(cluster == target_cluster)
+
+if(nrow(row_annotation_target) == 0) stop(paste("No genes found for Cluster", target_cluster))
+cat(paste("Found", nrow(row_annotation_target), "genes in Cluster", target_cluster, "\n"))
+
+# 过滤主矩阵
+heatmap_matrix_target <- heatmap_matrix_prepared[rownames(row_annotation_target), , drop = FALSE]
+
+# --- 对目标 Cluster 内部的基因进行排序 (例如，按字母顺序) ---
+row_order_target <- order(rownames(row_annotation_target))
+# row_annotation_target_sorted <- row_annotation_target[row_order_target, , drop = FALSE] # 不再需要排序后的注释，because不显示它
+heatmap_matrix_target_sorted <- heatmap_matrix_target[row_order_target, , drop = FALSE]
+
+
+# --- 6. (行排序步骤已合并到上面) ---
+heatmap_matrix_final <- heatmap_matrix_target_sorted # 这是最终用于绘图的矩阵
+
+
+# --- 7. 准备列注释并排序矩阵列 ---
+cat("Preparing column annotation and sorting columns...\n")
+desired_group_order <- c("WT_PF","Runx2_PF","KO_PF","DM_PF",
+                         "WT_SAG","Runx2_SAG","KO_SAG","DM_SAG")
+groupcolor <- c(WT_PF="#FF5733", Runx2_PF="#FFC300", KO_PF="#FF4081", DM_PF="#7B1FA2",
+                WT_SAG='#4CAF50', Runx2_SAG='#2196F3', KO_SAG='#795548', DM_SAG='#2C427E')
+if(!identical(names(groupcolor), desired_group_order)) warning("Names of groupcolor do not match desired_group_order!")
+
+sample_names <- colnames(heatmap_matrix_final)
+group_mapping <- gsub("_\\d+$", "", sample_names)
+if (!all(group_mapping %in% desired_group_order)) warning("Some sample names did not map to expected groups.")
+
+col_annotation_df <- data.frame(Group = factor(group_mapping, levels = desired_group_order))
+rownames(col_annotation_df) <- sample_names
+
+ordered_sample_indices <- order(factor(group_mapping, levels = desired_group_order))
+ordered_sample_names <- sample_names[ordered_sample_indices]
+
+heatmap_matrix_final <- heatmap_matrix_final[, ordered_sample_names, drop = FALSE]
+col_annotation_df_ordered <- col_annotation_df[ordered_sample_names, , drop = FALSE]
+
+
+# --- 8. Define注释颜色 (只Define列注释) ---
+cat("Defining annotation colors (only for columns)...\n")
+annotation_colors_list <- list(
+  Group = groupcolor
+)
+
+
+# --- 9. calculate Gaps (只calculate列) ---
+cat("Calculating column gaps...\n")
+col_gaps <- which(diff(as.numeric(col_annotation_df_ordered$Group)) != 0)
+
+
+# --- 10. 生成 Heatmap (使用 Workaround 显示部分行名，不显示行注释块) ---
+cat("Generating heatmap for Cluster", target_cluster, "using workaround for labels...\n")
+heatmap_body_colors <- colorRampPalette(c("navy", "white", "firebrick3"))(100)
+
+# --- 创建只包含部分基因名的标签向量 ---
+final_rownames <- rownames(heatmap_matrix_final) # Cluster 6 排序后的基因名
+row_labels <- rep("", length(final_rownames))
+genes_to_label <- intersect(gene_of_interest, final_rownames)
+indices_to_label <- match(genes_to_label, final_rownames)
+indices_to_label <- indices_to_label[!is.na(indices_to_label)]
+if(length(indices_to_label) > 0){
+    row_labels[indices_to_label] <- final_rownames[indices_to_label]
+    cat(paste("Prepared", sum(row_labels != ""), "labels for display.\n"))
+} else { cat("No genes of interest found in Cluster", target_cluster, "to label.\n") }
+
+# --- 创建用于显示的矩阵副本，并修改其行名 ---
+heatmap_matrix_display <- heatmap_matrix_final
+if(length(row_labels) != nrow(heatmap_matrix_display)) stop("Length mismatch: row_labels vs matrix rows.")
+rownames(heatmap_matrix_display) <- row_labels # 将标签设为行名
+cat("\n--- Final Detailed Check of Matrix to be Plotted ---\n")
+cat("1. Matrix: heatmap_matrix_display\n")
+print(paste("Dimensions:", paste(dim(heatmap_matrix_display), collapse=" x ")))
+
+cat("\n2. Rownames of heatmap_matrix_display:\n")
+current_rownames <- rownames(heatmap_matrix_display)
+print("Head of current rownames:")
+print(head(current_rownames))
+print("Tail of current rownames:")
+print(tail(current_rownames))
+
+non_empty_count <- sum(current_rownames != "")
+empty_count <- sum(current_rownames == "")
+print(paste("Total rows:", length(current_rownames)))
+print(paste("Non-empty rownames (should be labeled):", non_empty_count))
+print(paste("Empty rownames:", empty_count))
+
+if (non_empty_count > 0) {
+    cat("Sample of non-empty rownames that SHOULD be displayed:\n")
+    print(head(current_rownames[current_rownames != ""]))
+} else if (length(gene_of_interest) > 0 && length(intersect(gene_of_interest, rownames(heatmap_matrix_final))) > 0) {
+    # If我们期望有标签但实际没有，发出警告
+    warning("Row names for display matrix unexpectedly became all empty strings!")
+}
+
+cat("\n3. Column names head:\n")
+print(head(colnames(heatmap_matrix_display))) # Ensure列名仍然正确
+
+cat("--- End Final Detailed Check ---\n")
+
+# --- pheatmap 调用 (Workaround version) ---
+# Ensure这里的参数与上次尝试一致
+pheatmap_plot <- pheatmap(
+  heatmap_matrix_display,      # 使用修改了行名的矩阵
+  color = heatmap_body_colors,
+  # annotation_row = NA,       # Remove行注释块
+  annotation_col = col_annotation_df_ordered,
+  annotation_colors = annotation_colors_list, # 只含 Group 颜色
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  show_rownames = TRUE,          # *** 设为 TRUE ***
+  show_colnames = FALSE,
+  gaps_col = col_gaps,
+  # labels_row = NA,             # *** Remove此参数 ***
+  border_color = NA,
+  main = paste("Cluster", target_cluster, "Heatmap (Trying to Show Labels via Rownames)"),
+  fontsize = 8,
+  fontsize_row = 8               # Ensure字体 > 0
+)
+# --- 保存 ---
+pdf_filename <- paste0("Cluster", target_cluster, "_Heatmap_Labeled_NoRowAnno.pdf")
+pdf(pdf_filename, width = 8, height = 3) # 调整尺寸
+print(pheatmap_plot) # 显式打印图形对象到 PDF
+dev.off()
+cat(paste("Saved heatmap to:", pdf_filename, "\n"))
+```
+
+
+# 6 Feature Plot for DEs in OG3
+```{r}
+gc()
+rm(list=ls())
+.libPaths(c("/home/liuhuan/rpackage/", "/usr/local/lib/R/site-library"))
+library(ggplot2)
+library(Seurat)
+library(SeuratObject)
+library(RColorBrewer)
+library(dplyr)
+library(magrittr)
+suture_mes_mito_MAGIC <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed_20250420.rds")
+suture <- readRDS(file = "./SeuratObject/suture_harmony_celltype_20230328.rds")
+
+suture_OG <-readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_OG_0430.rds")
+```
+### 6.1 UMAP plot for celltype
+
+```{r,draft plot for celltype}
+DimPlot(suture, reduction = "umap", label = T, group.by = "celltype")
+plotc <- DimPlot(suture, reduction = "umap", label = T, group.by = "celltype")
+ggsave("./OutputFigure/suture_umap_celltype.pdf", plot = plotc, width = 7, height = 5)
+```
+### 6.2 mes plot for genes
+```{r}
+DefaultAssay(suture_mes_mito_MAGIC) <- "MAGIC_SCT"
+DefaultAssay(suture_OG) <- "MAGIC_SCT"
+
+```
+
+
+```{r, ibsp,fig.height=3, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Ibsp"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+            pt.size = 0.1,
+            label=T, repel=T)
+```
+```{r, Igfbp5,fig.height=3, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Igfbp5"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+            pt.size = 0.1,
+            label=T, repel=T)
+```
+```{r, Igfbp5,fig.height=9, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("mt-Co1","mt-Atp6","mt-Nd4"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+            pt.size = 0.1,
+            label=T, repel=T)
+```
+```{r, Igfbp5,fig.height=9, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Sqstm1","Nsd3","Atf4"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+            pt.size = 0.1,
+            label=T, repel=T)
+```
+
+```{r, ibsp,fig.height=3, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Tomm20"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+            pt.size = 0.1,
+            label=T, repel=T)
+```
+
+
+```{r, ibsp,fig.height=3, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Cdk8"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+            pt.size = 0.1,
+            label=T, repel=T)
+```
+
+```{r, ibsp,fig.height=3, fig.width=20}
+# Define目标顺序
+new_order <- c("WT_PF", "Runx2_PF", "KO_PF", "DM_PF", 
+               "WT_SAG", "Runx2_SAG", "KO_SAG", "DM_SAG")
+
+# 将 orig.ident 列转换为因子并设置顺序
+suture_OG@meta.data$orig.ident <- factor(
+  suture_OG@meta.data$orig.ident,
+  levels = new_order
+)
+
+
+FeaturePlot(suture_OG, features = c("Cdk8"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+            pt.size = 0.1,
+            label=T, repel=T)
+
+plotc1<- FeaturePlot(suture_OG, features = c("Cdk8"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+            pt.size = 0.1,
+            label=T, repel=T)
+
+ggsave("./OutputFigure/suture_mes_OG_Cdk8.pdf", plot = plotc1, width = 24, height = 3)
+```
+
+
+
+# X R session info
+
+
+```{r}
+session_info_file <- "./OutputFigure/session_info.txt"
+
+# Capture comprehensive environment details
+capture.output(
+  {
+    cat("=== Essential Session Information ===\n")
+    print(sessionInfo())
+    cat("\n\n=== Loaded Namespace Packages ===\n")
+    print(sessionInfo()$loadedOnly)
+  },
+  file = session_info_file
+)
+
+
+```
+
+

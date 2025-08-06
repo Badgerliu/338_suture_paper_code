@@ -1,0 +1,631 @@
+---
+title: "P9  Mouse suture scRNA -- Integration of PF and SAG from all four genotypes"
+author: "Huan"
+date: "8/22/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE
+)
+```
+
+This note was used for integrative single cell RNA-seq analysis of `P9 wildtype mouse suture`.
+
+Input  Seurat Objects: "WT_PF_Seurat.rds", "WT_SAG_Seurat.rds", "Runx2_PF_Seurat.rds", "Runx2_SAG_Seurat.rds", "KO_PF_Seurat.rds", "KO_SAG_Seurat.rds", "DM_PF_Seurat.rds", "DM_SAG_Seurat.rds" from codes in "PreprationSeuratObjects" folder.
+
+# 1 Setup of analysis environment
+## 1.1 Package installation 
+Seurat (v3), harmony,ggplot2,magrittr and sctransform packages were installed.
+
+## 1.2 Load environment and packages
+```{r load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+set.seed(12)
+theme_set(theme_bw())
+```
+
+## 1.3 Load data saved Seurat objects
+```{r, load saved Seurat dataset}
+WT_PF <- readRDS("./SeuratObject/WT_PF_Seurat.rds")
+WT_SAG <- readRDS("./SeuratObject/WT_SAG_Seurat.rds")
+Runx2_PF <- readRDS("./SeuratObject/Runx2_PF_Seurat.rds")
+Runx2_SAG <- readRDS("./SeuratObject/Runx2_SAG_Seurat.rds")
+KO_PF <- readRDS("./SeuratObject/KO_PF_Seurat.rds")
+KO_SAG <- readRDS("./SeuratObject/KO_SAG_Seurat.rds")
+DM_PF <- readRDS("./SeuratObject/DM_PF_Seurat.rds")
+DM_SAG <- readRDS("./SeuratObject/DM_SAG_Seurat.rds")
+
+```
+
+```{r, merge seurat objects}
+suture <- merge(WT_PF, 
+                 y = c(WT_SAG, Runx2_PF, Runx2_SAG, KO_PF, KO_SAG, DM_PF, DM_SAG), # if you have more objects, you may add here
+                 add.cell.ids = c("WT_PF","WT_SAG", "Runx2_PF", "Runx2_SAG", "KO_PF", "KO_SAG", "DM_PF", "DM_SAG"), 
+                 project = "suture")
+suture # 45986 features across 65155 samples within 2 assays 
+```
+
+```{r, reperform SCT}
+suture.list <- SplitObject(object = suture, split.by = "orig.ident")
+for (i in 1:length(suture.list)) {
+    suture.list[[i]] <- SCTransform(suture.list[[i]], verbose = FALSE)
+} #I'm not sure if the split and merge is necessary, but it won't cause trouble
+
+```
+
+## 1.4 Integration
+Following the discussion in `https://github.com/immunogenomics/harmony/issues/41`
+```{r, select integration feature for the merged dataset}
+suture.features <- SelectIntegrationFeatures(object.list = suture.list, nfeatures = 3000)
+suture <- merge(suture.list[[1]],
+                   y = suture.list[2:length(suture.list)],  
+                   project = "suture", 
+                   merge.data = TRUE)
+VariableFeatures(suture) <- suture.features
+```
+
+PCA using SCT features
+```{r,PCA using SCT features}
+suture <- RunPCA(object = suture, assay = "SCT", npcs = 50)
+```
+
+
+
+```{r, integration and batch effect removal using hamony}
+system.time({
+    suture <- RunHarmony(object = suture, 
+                         assay.use = "SCT",
+                         reduction = "pca",
+                         dims.use = 1:50, # this is a default number, but you can always change it as your wish
+                         group.by.vars = "orig.ident",
+                         plot_convergence = TRUE)
+})
+```
+
+## 1.5 Dimension reduction
+*You may probe dims and resolution in details*
+```{r, dimension reduction}
+suture <- RunUMAP(object = suture, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+suture <- FindNeighbors(object = suture, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+```
+*For details of probing resolution, refer to `https://cloud.tencent.com/developer/article/1825681`. *
+
+```{r, probing resolution parameter}
+library(tidyverse)
+library(cowplot)
+library(clustree)
+suture.resolution <- FindClusters(suture,dims=1:50,resolution = seq(from=0,by=.2,length=10))
+
+```
+```{r, fig.height=10, fig.width=10}
+clustree(suture.resolution)
+```
+*Choosing resolution is quite arbitrary and no conclusion has been attained before biological validation*
+The `suture.resolution` object has many choice for resultion, such as SCT_snn_res.0.8. You may want to plot and check. Here are some examples:
+```{r}
+DimPlot(suture.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.2")
+DimPlot(suture.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.4")
+DimPlot(suture.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.6")
+DimPlot(suture.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.8")
+
+```
+From the above plot you may "see" how different resolutions result in different cluster, and "shift" of cluster with the change of resolution For instance the cluster 1 in res0.2 and cluster 0,7 in res 0.4.
+
+If you are fine with one resolution, you may choose it and perform cluster, and your Seurat object will inherit the resolution.
+Here for general cell type annotation, we used resolution to 0.2
+
+```{r, cluster with a suitable resolution}
+suture <- FindClusters(object = suture, resolution = 0.2) #You may probe resolution in details
+```
+
+```{r, test plot}
+plots <- DimPlot(suture, group.by = c("orig.ident", "seurat_clusters"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+## 1.6 Initial plots 
+```{r, initial plots}
+#group_by_cluster
+plot1 = DimPlot(suture, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(suture, reduction = "umap", group.by = "orig.ident")
+plot3 = DimPlot(suture, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+ggsave("./OutputFigure/suture_umap.png", plot = plotc, width = 10, height = 5)# you need to channge the size parameters according to the number of plots.
+plot3
+ggsave("./OutputFigure/suture_umap_split.png", plot = plot3, width = 40, height = 5) # you need to channge the size parameters according to the number of plots.
+
+DimPlot(suture, reduction = "umap", label = T)
+DimPlot(suture, reduction = "umap", group.by = "orig.ident")
+
+```
+
+## 1.7 Save Object
+
+```{r, output integrated data}
+saveRDS(suture, file = "./SeuratObject/suture_harmony_20221120.rds")
+```
+
+## 1.8 (Optional) Split Object
+*This is necessary if you want to perform cellchat*
+*You may also split after assigning the cell type*
+
+For replication of the work, I split and saved object depending on orig.idents.
+
+```{r, oject split and saved }
+suture_list <- SplitObject(suture, split.by = "orig.ident")
+WT_SAG <-suture_list[["WT_SAG"]]
+saveRDS(WT_SAG, file = "./SeuratObject/WT_SAG_seurat_20221120.rds")
+WT_PF <-suture_list[["WT_PF"]]
+saveRDS(WT_PF, file = "./SeuratObject/WT_PF_seurat_20221120.rds")
+
+```
+
+
+# 2  Marker genes identification
+
+## 2.1 Marker genes identification
+Identification of marker genes
+refer to `https://github.com/satijalab/seurat/issues/2115` Perform DE using RNA rather than SCT
+```{r, generally find marker genes}
+Idents(suture) <- suture$seurat_clusters
+DefaultAssay(suture) <- "RNA"
+suture <- NormalizeData(suture)
+all.genes <- rownames(suture)
+suture <- ScaleData(suture, features = all.genes)
+suture_markers <- FindAllMarkers(object = suture, only.pos = TRUE, 
+                               min.pct = 0.25, thresh.use = 0.25) #identify positive marker genes 
+top10 <- suture_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) # You may change n=10 to other number to get top_n genes as you wish.
+```
+
+```{r, output tables for marker genes}
+write.csv(suture_markers, file = "./OutputTable/suture_markers_20221120.csv", row.names = FALSE)
+write.csv(top10, file = "./OutputTable/suture_top10_markers_20221120.csv", row.names = FALSE)
+
+
+```
+
+Plot heatmap for marker genes
+```{r, heatmapplot, fig.width=10, fig.height=18 }
+#DefaultAssay(suture) <- "SCT"
+DoHeatmap(suture, features = top10$gene)
+ggsave("./OutputFigure/suture_markers_top10_20221120.pdf", device = "pdf",#adjust filename accordingly
+       width = 30, #adjust according to the display of output
+       height = 55, #adjust according to the display of output
+       units = "cm")
+
+```
+
+
+
+##2.2  Dot plot for different genes of interest
+```{r, setup gene list}
+#markers refer to https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7359078/
+genes_to_check <- c("H2-Eb1", "Cxcl2","Cd74","Cd52", #Myeloid Cell
+		      "Hba-a2", "Hba-a1", "Gypa","Cd24a", #Erythroblasts
+                        "Cd24a","Cd79b", "Cd79a", #B Cell
+                        "Emb","Cd52","Trbc2", #T Cell
+                             "Fabp4","Cldn5","Gpihbp1", #Endothelial Cell
+                             "Acp5","Mmp9","S100a4", #Osteoclasts
+                             "Pde6g","Gnb3","Chgb","Snap25", #Neuron
+                             "Mpz","Mbp","Egfl8", #Schwann Cell
+                             "Cma1","Hdc", "Cpa3",#Mast Cell
+                             "Sox10","Mpz","Plp1","Gfra3",#Glia
+                             "Stfa1","Ngp","Camp",#Neutrophil
+                             "Rgs5","Acta2", "Actg2",#Pericyte
+                             "Col2a1", "Col11a1", ##Chondrocyte
+                             "Ccl11","Tnn", ##VSMCs
+                             "Malat1","Auts2","Tgfr2","Ly6a","Clec3b",##Mesenchyme
+                              "Postn","Bglap","Sfrp2" #Mesenchyme
+                             )
+```
+
+
+```{r, dot plot to show the distribution of marker genes in each seurat cluster}
+DotPlot(suture, features = unique(genes_to_check),group.by = "seurat_clusters")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+#NA represent genes without detection, you need to adjust the name for genes of interest above
+```
+
+```{r, another version of dotplot for marker genes,fig.width=8, fig.height=5}
+Idents(suture) <- suture$seurat_clusters
+DotPlot(suture, features=unique(genes_to_check))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./OutputFigure/suture_dotplot_marker_genes_unordered.pdf", width = 30, height =15,units = "cm")
+```
+
+```{r, cluster version of dotplot for marker genes, fig.width= 10, fig.height=10}
+
+dp = DotPlot(suture, features = unique(genes_to_check)) + RotatedAxis()
+dot_plot(dp$data[,c(3,4,1,2,5)],
+         size_var = 'pct.exp',
+         col_var = 'avg.exp.scaled',
+         size_legend = 'Percent Expressed',
+         col_legend = 'Average Expression',
+         x.lab.pos = 'bottom',
+         y.lab.pos = 'right',
+         display_max_sizes = F,
+         shape.scale = 8,
+         hclust_method = 'ward.D2',
+         dend_x_var = c('pct.exp','avg.exp.scaled'),
+         dend_y_var = c('pct.exp','avg.exp.scaled'),
+         text.size = 0.5,
+         text.vjust = 0.5,
+         size.breaks.number = 6,
+         color.breaks.number = 4,
+         x.lab.size.factor = 0.8,
+         cols.use = c('#330066','#336699','#66CC66','#FFCC33'),
+         y.lab.size.factor = 1)
+ggsave("./OutputFigure/suture_dotplot_marker_genes.png", width = 30, height =40) # this is not working, you may right click the figure and save as another png file.
+```
+
+* Usually, you need to stop here, and spend one to two days to analyze the marker genes in each cluster and assign the appropriate cell type name.*
+* If you are note sure the exact cell type name, especially in case of embryonic development, you can assign it according to the uniquely-expressed genes or the general cell type plus a number, ie. `mes_2`. *
+
+# 3 Split object depending on PF and SAG
+## 3.0 Load packages and Datasets
+```{r, load packages and datasets}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+set.seed(12)
+theme_set(theme_bw())
+
+suture <- readRDS("./SeuratObject/suture_harmony_20221120.rds")
+
+```
+Always make the plots to check if you are using the righ object
+
+```{r, check the plot}
+plots <- DimPlot(suture, group.by = c("orig.ident", "seurat_clusters"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+## 3.1 Split PF and SAG object
+```{r, add Metadata}
+# Define a function to map "orig.ident" to group names
+
+map_orig_ident_to_group <- function(orig_ident) {
+  # Replace the "orig.ident" and "group" values with your specific sample and group names
+  group_mapping <- c(
+  "DM_PF" = "PF",
+  "DM_SAG" = "SAG",
+  "KO_PF" = "PF",
+  "KO_SAG" = "SAG",
+  "Runx2_PF" = "PF",
+  "Runx2_SAG" = "SAG",
+  "WT_PF" = "PF",
+  "WT_SAG" = "SAG" 
+  )
+  
+  return(group_mapping[orig_ident])
+}
+
+# Add the group information based on "orig.ident" values
+suture@meta.data <- suture@meta.data %>%
+  mutate(group = map_orig_ident_to_group(orig.ident))
+
+head(suture@meta.data)
+tail(suture@meta.data)
+```
+
+
+```{r, check the plot based on group}
+plots <- DimPlot(suture, group.by = c("group", "seurat_clusters"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+```{r, output integrated data}
+saveRDS(suture, file = "./SeuratObject/suture_harmony_20221120.rds")
+```
+
+
+
+
+```{r, oject split and saved }
+suture_list <- SplitObject(suture, split.by = "group")
+PF <-suture_list[["PF"]]
+saveRDS(PF, file = "./SeuratObject/PF_seurat_20221120.rds")
+SAG <-suture_list[["SAG"]]
+saveRDS(SAG, file = "./SeuratObject/SAG_seurat_20221120.rds")
+
+```
+
+
+
+
+# 4 Cell type assignment
+## 4.0 Load packages and Datasets
+```{r, load packages and datasets}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+set.seed(12)
+theme_set(theme_bw())
+
+suture <- readRDS("./SeuratObject/suture_harmony_20221120.rds")
+
+```
+Always make the plots to check if you are using the righ object
+
+```{r, check the plot}
+plots <- DimPlot(suture, group.by = c("orig.ident", "seurat_clusters"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+```{r}
+DimPlot(suture, group.by = c("seurat_clusters"), combine = FALSE, pt.size = .2,
+        label = TRUE)
+```
+```{r, marker for cluster mito percent,fig.height=2, fig.width=3}
+library("RColorBrewer")
+FeaturePlot(suture, features = c("percent.mt"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+
+```{r, marker for cluster 0,fig.height=4, fig.width=5}
+FeaturePlot(suture, features = c("Sox9","Acan",
+                                          "Mia","Col2a1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+```{r, marker for cluster 0,fig.height=4, fig.width=5}
+FeaturePlot(suture, features = c("Rgs5","Acta2",
+                                          "Myh11"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+```{r, marker for cluster 0,fig.height=4, fig.width=5}
+FeaturePlot(suture, features = c("Cma1","Hdc", "Cpa3"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+```{r, marker for cluster 0,fig.height=4, fig.width=5}
+FeaturePlot(suture, features = c("Il1rl1","Gata2","Cyp11a1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+##4.1 Association of marker genes and cell type
+```{r, set different cluster to different cell type}
+new.cluster.ids <- c("Mesenchyme",#0
+                     "Mesenchyme",#1
+                     "Mesenchyme",#2
+                     "Mesenchyme",#3
+                     "Myeloid Cells",#4
+                     "Mesenchyme",#5
+                     "Mesenchyme",#6
+                     "Mesenchyme", #7
+                     "Mesenchyme", #8
+                     "Myeloid Cells", #9
+                     "Unknown1", #10
+                     "B Cells", #11
+                     "Mesenchyme", #12
+                     "Mesenchyme", #13
+                     "Neutrophil", #14
+                     "Endothelial Cells", #15
+                     "Osteoclasts", #16
+                     "Neurons",#17
+                     "T Cells",#18
+                     "Glia/Schwann Cells",#19
+                     "Erythroblasts",#20
+                     "Mast Cells",#21
+                     "Unknown2"#22
+                     )
+suture@meta.data$celltype<- suture@meta.data$seurat_clusters
+levels(suture@meta.data$celltype) <- new.cluster.ids  #celltype assignment
+```
+
+```{r,dotplot for cell types,fig.height=4, fig.width=12}
+genes_to_check <- c("H2-Eb1", "Cxcl2","Cd74", #Myeloid Cell
+              "Hba-a2", "Hba-a1", "Gypa","Cd24a", #Erythroblasts
+                        "Cd24a","Cd79b", "Cd79a", #B Cell
+                        "Emb","Cd52","Trbc2", #T Cell
+                             "Fabp4","Cldn5","Gpihbp1", #Endothelial Cell
+                             "Acp5","Mmp9","S100a4", #Osteoclasts
+                             "Pde6g","Gnb3","Chgb","Snap25", #Neuron
+                             "Mpz","Mbp","Egfl8", #Schwann Cell
+                             "Cma1","Hdc", "Cpa3",#Mast Cell
+                             "Stfa1","Ngp","Camp",#Neutrophil
+                             "Rgs5","Acta2", "Actg2",#Pericytes
+                             "Col2a1", "Sox9","Acan", ##Chondrocyte
+                             "Pi16","Ly6a","Clec3b",##Mesenchyme
+                             "Postn","Bglap","Dmp1" #Mesenchyme
+                             )
+DotPlot(suture, features = unique(genes_to_check),group.by = "celltype")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+ggsave("./OutputFigure/suture_harmony_dotplot_celltype.pdf",width = 15,height = 6)
+
+```
+
+
+
+```{r,dotplot for cell types blue red color,fig.height=4, fig.width=12}
+DotPlot(suture, features = unique(genes_to_check),
+        cols = c("lightgrey","red"),col.min = 0, col.max = 3,
+        group.by = "celltype")+
+  RotatedAxis()+
+  scale_x_discrete("")+
+  scale_y_discrete("")
+ggsave("./OutputFigure/suture_harmony_dotplot_celltype_red.pdf",width = 15,height = 6)
+
+
+```
+```{r, dotplot with different celltype, green and yellow,fig.height=6, fig.width=15}
+Idents(suture) <- suture$celltype
+DotPlot(suture, features=unique(genes_to_check))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./OutputFigure/suture_harmony_dotplot_celltype_green.pdf",width = 15,height = 6)
+```
+```{r, cell type umap plot}
+Idents(suture)<-suture$celltype
+#group_by_cluster
+plot1 = DimPlot(suture, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(suture, reduction = "umap", group.by = "orig.ident")
+plot3 = DimPlot(suture, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+plotc
+ggsave("./OutputFigure/suture_celltype_umap.png", plot = plotc, width = 12, height = 5)
+plot3
+ggsave("./OutputFigure/suture_celltype_umap_split.png", plot = plot3, width = 20, height = 5)
+
+DimPlot(suture, reduction = "umap", label = T)
+DimPlot(suture, reduction = "umap", group.by = "orig.ident")
+
+```
+## 4.2 Save Object
+
+```{r, output integrated data with celltype curation}
+saveRDS(suture, file = "./SeuratObject/suture_harmony_celltype_20230328.rds")
+```
+
+## 4.3 Split object by cell type
+```{r, preset celltype}
+Idents(suture)<-suture$celltype
+```
+
+### 4.3.1 Mesenchyme
+```{r, subset mes cluster by celltype}
+suture_mes <- subset(suture, idents="Mesenchyme")
+```
+
+```{r,check data structure after subset}
+suture_mes
+table(suture_mes@meta.data$orig.ident)
+DimPlot(suture_mes, reduction = "umap", label = T)
+```
+
+```{r, export suture_mes populations}
+saveRDS(suture_mes, file = "./SeuratObject/suture_mes_raw_20230328.rds")
+```
+### 4.3.2 Myeloid-osteoclast
+Despite of the possible mesenchyme origin of glial cells, we isolated all the non-mesenchyme cells object and check marker genes expression
+```{r, subset mes cluster by celltype}
+suture_other <- subset(suture, idents=c("Myeloid Cells","Osteoclasts","B Cells", 
+                                      "Neutrophil","Endothelial Cells","Osteoclasts",
+                                      "Neurons","T Cells","Glia/Schwann Cells",
+                                      "Erythroblasts","Mast Cells"))
+```
+
+```{r,check data structure after subset}
+suture_other
+table(suture_other@meta.data$orig.ident)
+DimPlot(suture_other, reduction = "umap", label = T)
+```
+```{r,dotplot for cell types,fig.height=4, fig.width=12}
+genes_to_check_non_mes <- c("H2-Eb1", "Cxcl2","Cd74", #Myeloid Cell
+              "Hba-a2", "Hba-a1", "Gypa","Cd24a", #Erythroblasts
+                        "Cd24a","Cd79b", "Cd79a", #B Cell
+                        "Emb","Cd52","Trbc2", #T Cell
+                             "Fabp4","Cldn5","Gpihbp1", #Endothelial Cell
+                             "Acp5","Mmp9","S100a4", #Osteoclasts
+                             "Pde6g","Gnb3","Chgb","Snap25", #Neuron
+                             "Mpz","Mbp","Egfl8", #Schwann Cell
+                             "Cma1","Hdc", "Cpa3",#Mast Cell
+                             "Stfa1","Ngp","Camp"#Neutrophil
+                             )
+DotPlot(suture_other, features = unique(genes_to_check_non_mes),group.by = "celltype")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+ggsave("./OutputFigure/suture_other_harmony_dotplot_celltype.pdf",width = 12,height = 6)
+
+```
+
+
+
+```{r,dotplot for cell types blue red color,fig.height=4, fig.width=12}
+DotPlot(suture_other, features = unique(genes_to_check_non_mes),
+        cols = c("lightgrey","red"),col.min = 0, col.max = 3,
+        group.by = "celltype")+
+  RotatedAxis()+
+  scale_x_discrete("")+
+  scale_y_discrete("")
+ggsave("./OutputFigure/suture_other_harmony_dotplot_celltype_red.pdf",width = 15,height = 6)
+
+
+```
+```{r, dotplot with different celltype, green and yellow,fig.height=6, fig.width=15}
+Idents(suture_other) <- suture_other$celltype
+DotPlot(suture_other, features=unique(genes_to_check_non_mes))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./OutputFigure/suture_other_harmony_dotplot_celltype_green.pdf",width = 15,height = 6)
+```
+
+```{r, export suture_mye populations}
+saveRDS(suture_other, file = "./SeuratObject/suture_other_raw_20230328.rds")
+```
+
+
+
+
+

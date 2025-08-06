@@ -1,0 +1,2395 @@
+---
+title: "P9  Mouse suture scRNA -- mes regress to mto using MAGIC"
+author: "Huan"
+date: "8/22/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE
+)
+```
+
+This note was used for integrative single cell RNA-seq analysis of `P9 wildtype mouse suture`.
+
+"suture_mes_mito_harmony_20230329.rds" object was subjected to MAGIC step in this script.
+Resulted "suture_mes_mito_MAGIC_harmony_20230329.rds" object was then subjected to the downstream analysis including DEG and differential proportion analysis.
+
+We employed the following approaches: MAGIC
+
+# 1 MAGIC
+refering to `http://htmlpreview.github.io/?https://github.com/KrishnaswamyLab/MAGIC/blob/master/Rmagic/inst/examples/bonemarrow_tutorial.html`
+## 1.0 Load data and packages
+```{r load of packages and setup of the environment 1}
+gc()
+rm(list=ls())
+library(reticulate)
+use_condaenv("MAGIC", required = TRUE)
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+library(phateR)
+library(viridis)
+library(readr)
+library(Rmagic)
+
+
+
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito <- readRDS(file = "./SeuratObject/suture_mes_mito_harmony_20230329.rds")
+
+```
+
+First test python environment
+```{r}
+library(reticulate)
+use_condaenv("MAGIC", required = TRUE)
+```
+
+```{r}
+py_config()
+```
+
+```{r}
+magic <- import("magic")
+```
+
+Generate expression matrix
+
+```{r}
+
+suture_mes_mito_RNA<-GetAssayData(object = suture_mes_mito[["RNA"]], slot = "count")
+suture_mes_mito_RNA_table<-as.data.frame(suture_mes_mito_RNA)
+
+head(suture_mes_mito_RNA_table)
+```
+Transpose matrix
+```{r}
+suture_mes_mito_RNA_table_t <- as.matrix(t(suture_mes_mito_RNA_table))
+
+```
+
+```{r}
+row.names(suture_mes_mito_RNA_table_t) <-NULL
+suture_mes_mito_RNA_table_t[1:5,1:10]
+```
+Filter genes expression matrix
+```{r}
+# keep genes expressed in at least 10 cells
+keep_cols <- colSums(suture_mes_mito_RNA_table_t > 0) > 10
+suture_mes_mito_RNA_table_t <- suture_mes_mito_RNA_table_t[,keep_cols]
+# look at the distribution of library sizes
+ggplot() +
+  geom_histogram(aes(x=rowSums(suture_mes_mito_RNA_table_t)), bins=50) +
+  geom_vline(xintercept = 2500, color='red')
+```
+From the above plot, we can set umi threshold as 2500
+```{r}
+# keep cells with at least 1000 UMIs
+keep_rows <- rowSums(suture_mes_mito_RNA_table_t) > 2500
+suture_mes_mito_RNA_table_t <- suture_mes_mito_RNA_table_t[keep_rows,]
+```
+
+Normalizing data
+
+We should library size normalize and transform the data prior to MAGIC. Many people use a log transform, which requires adding a “pseudocount” to avoid log(0). We square root instead, which has a similar form but doesn’t suffer from instabilities at zero.
+```{r}
+suture_mes_mito_RNA_table_t <- library.size.normalize(suture_mes_mito_RNA_table_t)
+suture_mes_mito_RNA_table_t <- sqrt(suture_mes_mito_RNA_table_t)
+```
+
+
+
+
+
+
+## 1.1 Further MAGIC for all genes
+Using MAGIC for downstream analysis
+
+
+```{r}
+suture_mes_mito_MAGIC <- magic(suture_mes_mito_RNA_table_t, genes=c("Runx2", "Bglap", "Postn"))
+```
+
+```{r}
+ggplot(suture_mes_mito_MAGIC) +
+  geom_point(aes(Runx2, Bglap, color=Postn)) +
+  scale_color_viridis(option="B")
+```
+We can look at the entire smoothed matrix with genes='all_genes', passing the original result to the argument init to avoid recomputing intermediate steps. Note that this matrix may be large and could take up a lot of memory.
+
+```{r}
+DefaultAssay(suture_mes_mito) <- "SCT"
+suture_mes_mito_MAGIC <- magic(suture_mes_mito, genes="all_genes",
+                     t=12, init=suture_mes_mito_MAGIC)
+#"Added MAGIC output to MAGIC_SCT. To use it, pass assay='MAGIC_SCT' to downstream methods or set DefaultAssay(seurat_object) <- 'MAGIC_SCT'."
+```
+
+
+
+```{r}
+suture_mes_mito_MAGIC_RNA<-GetAssayData(object = suture_mes_mito_MAGIC[["MAGIC_SCT"]], slot = "data")
+suture_mes_mito_MAGIC_RNA_table<-as.data.frame(suture_mes_mito_MAGIC_RNA)
+
+head(suture_mes_mito_MAGIC_RNA_table)
+```
+
+This is a matrix for further correlation analysis of any genes of interest.
+
+```{r}
+suture_mes_mito_MAGIC_RNA_table_t <- t(suture_mes_mito_MAGIC_RNA_table)
+suture_mes_mito_MAGIC_RNA_table_t[1:5,1:10]
+```
+
+
+```{r}
+suture_mes_mito_MAGIC_RNA_table_t <- as.data.frame(suture_mes_mito_MAGIC_RNA_table_t)
+ggplot(suture_mes_mito_MAGIC_RNA_table_t) +
+  geom_point(aes(suture_mes_mito_MAGIC_RNA_table_t$Runx2, suture_mes_mito_MAGIC_RNA_table_t$Bglap, color=suture_mes_mito_MAGIC_RNA_table_t$Postn)) +
+  scale_color_viridis(option="B")
+```
+
+
+## 1.2 Standard Seurat for MAGIC object
+*You may probe dims and resolution in details*
+```{r, dimension reduction}
+suture_mes_mito_MAGIC <- RunUMAP(object = suture_mes_mito_MAGIC, assay = "MAGIC_SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+Filter(f = function(x) inherits(suture_mes_mito_MAGIC[[x]], "Graph"), names(suture_mes_mito_MAGIC))
+suture_mes_mito_MAGIC <- FindNeighbors(object = suture_mes_mito_MAGIC, assay = "MAGIC_SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+```
+```{r}
+Filter(f = function(x) inherits(suture_mes_mito_MAGIC[[x]], "Graph"), names(suture_mes_mito_MAGIC))
+```
+
+
+*For details of probing resolution, refer to `https://cloud.tencent.com/developer/article/1825681`. *
+Here we will set an intermediate seurat object innheriting all the metadata from the formal object.
+```{r, probing resolution parameter}
+
+suture_mes_mito_MAGIC.resolution <- FindClusters(suture_mes_mito_MAGIC, dims=1:50,resolution = seq(from=0,by=.2,length=10))
+
+```
+
+```{r, fig.height=10, fig.width=10}
+clustree(suture_mes_mito_MAGIC.resolution)
+```
+*Choosing resolution is quite arbitrary and no conclusion has been attained before biological validation*
+The `suture.resolution` object has many choice for resultion, such as SCT_snn_res.0.6. You may want to plot and check. Here are some examples:
+```{r, probeing resolution}
+DimPlot(suture_mes_mito_MAGIC.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.2")
+DimPlot(suture_mes_mito_MAGIC.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.4")
+DimPlot(suture_mes_mito_MAGIC.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.6")
+DimPlot(suture_mes_mito_MAGIC.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.8")
+
+```
+
+Here we choose res = 0.6
+
+
+```{r, cluster with a suitable resolution}
+suture_mes_mito_MAGIC <- FindClusters(object = suture_mes_mito_MAGIC, resolution = 0.6) #You may probe resolution in details
+```
+
+```{r, test plot,fig.height=5, fig.width=8}
+plots <- DimPlot(suture_mes_mito_MAGIC, group.by = c("orig.ident", "seurat_clusters"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+## 1.3 Initial plots 
+After the clustering, we are eager to see the topological relationship between different clusters.
+```{r, initial plots}
+#group_by_cluster
+plot1 = DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(suture_mes_mito_MAGIC, reduction = "umap", group.by = "orig.ident")
+plot3 = DimPlot(suture_mes_mito_MAGIC, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_umap.png", plot = plotc, width = 10, height = 5)
+plot3
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_umap_split.png", plot = plot3, width = 20, height = 5) # You may set the parameters, especially the "width". Usually each plot will take about 5.5 unit.
+
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T)
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", group.by = "orig.ident")
+
+```
+
+```{r, marker for cluster mito percent,fig.height=2, fig.width=3}
+library(RColorBrewer)
+FeaturePlot(suture_mes_mito_MAGIC, features = c("percent.mt"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+```{r, marker for cluster mito percent,fig.height=2, fig.width=3}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Runx2"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+```{r, marker for cluster mito percent,fig.height=2, fig.width=3}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Ier2"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+```{r, marker for cluster mito percent,fig.height=3, fig.width=15}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Ier2"),
+            split.by="orig.ident",
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+## 1.4 Save unnamed object
+```{r, output integrated data}
+saveRDS(suture_mes_mito_MAGIC, file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_20230329.rds")
+```
+
+## 1.5 Rename cluster
+```{r, remove unwanted objects in the environment and load pacakges}
+
+rm(list=ls())
+library(RColorBrewer)
+suture_mes_mito_MAGIC <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_20230329.rds")
+gc()
+Idents(suture_mes_mito_MAGIC) <- c("SCT_snn_res.0.6")
+```
+
+
+
+Here we will subset the object, given the unclear annotation for cluster 12(no specific coding gene expression)
+```{r, marker for cluster mito percent,fig.height=2, fig.width=3}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("percent.mt"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+
+Since cluster 14 and 15 are abundent with mito genes, we removed them.
+```{r, subset seurat object}
+suture_mes_mito_MAGIC <- subset(suture_mes_mito_MAGIC, idents=c(0:13))
+```
+Check the distribution of mito percentage again.
+```{r, marker for cluster mito percent,fig.height=2, fig.width=3}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("percent.mt"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+```{r, initial plot for cluster}
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T)
+
+```
+## 1.5.1 Marker genes identification
+Identification of marker genes
+refer to `https://github.com/satijalab/seurat/issues/2115` Perform DE using RNA rather than SCT
+
+```{r, generally find marker genes}
+Idents(suture_mes_mito_MAGIC) <- c("SCT_snn_res.0.6")
+
+DefaultAssay(suture_mes_mito_MAGIC) <- "RNA"
+suture_mes_mito_MAGIC <- NormalizeData(suture_mes_mito_MAGIC)
+all.genes <- rownames(suture_mes_mito_MAGIC)
+suture_mes_mito_MAGIC <- ScaleData(suture_mes_mito_MAGIC, features = all.genes)
+suture_mes_mito_MAGIC_markers <- FindAllMarkers(object = suture_mes_mito_MAGIC, only.pos = TRUE, 
+                               min.pct = 0.25, thresh.use = 0.25) #identify positive marker genes 
+top10 <- suture_mes_mito_MAGIC_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) # You may change n=10 to other number to get top_n genes as you wish.
+```
+
+```{r, output tables for marker genes}
+write.csv(suture_mes_mito_MAGIC_markers, file = "./OutputTable/suture_mes_mito_MAGIC_markers_20230328.csv", row.names = FALSE)
+write.csv(top10, file = "./OutputTable/suture_mes_mito_MAGIC_top10_markers_20230328.csv", row.names = FALSE)
+
+
+```
+
+Plot heatmap for marker genes
+```{r, heatmapplot, fig.width=10, fig.height=18 }
+
+DoHeatmap(suture_mes_mito_MAGIC, features = top10$gene)
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_markers_top10_20230328.pdf", device = "pdf",#adjust filename accordingly
+       width = 30, #adjust according to the display of output
+       height = 55, #adjust according to the display of output
+       units = "cm")
+
+```
+
+## 1.5.2 Marker genes plot
+Here, we will first plot marker genes 
+```{r, marker for cluster 0,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Sfrp2","Tac1",
+                                          "Scx","Igfbp3"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+Thus, we name cluster 0 as ligament like cells (LIG)
+
+```{r, marker for cluster 1,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Postn","Mmp13","Npnt","Podnl1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With Mmp13 and Podnl1 highly enriched in osteogenic cluster, we name it as "OG1"
+
+```{r, marker for cluster 2,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Matn4","Cpz","Nppc","Fmod"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With highly enrichment of Matn4 and some overlap of Nppc, cluster2 must belong to outer menigeal population, making it as "MG1"
+
+
+```{r, marker for cluster 3,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Crabp2","Gsta4","Slc4a10","Fxyd5"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With highly enrichment of Crabp2 and Fxyd5, cluster 3 belongs to inner menigeal population, making it as "MG2".
+
+```{r, marker for cluster 4,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Crip1","Tnn","Npnt","Tnc"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With partially overlap of Npnt, Tnn and Tnc, we term this cluster as "OG2".
+
+
+```{r, marker for cluster 5,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Ppp1r10","Wsb1","Rasl11b","Irf1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With partial overlap with Matn4, we term this cluster as "MG3".
+
+
+```{r, marker for cluster 6,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Stmn1","Hmgb2","Top2a","Mki67"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+With specific enrichment of Mki67 and Top2a, which is highly associated with proliferation, we term this as "PO".
+
+```{r, marker for cluster 7,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Ccl11","Il6","Igf1","Col4a1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With highly overlap expression pattern of Igf1, we term this cluster as "MG4".
+
+```{r, marker for cluster 8,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Bglap","Ibsp","Dmp1","Ifitm5"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With a relatively terminal differentiation marker for osteoblasts, Dmp1 and Ifitm5, we term this cluster as "OG3".
+
+```{r, marker for cluster 9,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Pi16","Ly6a","Clc3b"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With Pi16 and Ly6a, markers for ectocranial population, we term this cluster as "EC".
+
+```{r, marker for cluster 10,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Col2a1","Mia","Mmp9","Acan"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+This cluster were termed as "Chondro" for chondrogenesis.
+
+```{r, marker for cluster 11,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Rgs5","Procr","Myh11","Gm13889"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+This cluster were termed as "Peri" for pericytes.
+
+```{r, marker for cluster 5,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Tnmd","Matn4",
+                                          "Scx","Cilp2"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+## 1.5.3 Rename cluster
+```{r, rename cluster}
+new.cluster.ids <- c("LIG", #Cluster 0 
+                     "OG1", #Cluster 1 
+                     "OG2", #Cluster 2 
+                     "MG1", #Cluster 3 
+                     "MG3", #Cluster 4 
+                     "OG0", #Cluster 5 
+                     "MG2", #Cluster 6 
+                     "PO", #Cluster 7 
+                     "MG5", #Cluster 8 
+                     "MG4", #Cluster 9 
+                     "OG3", #Cluster 10 
+                     "EC", #Cluster 11
+                     "Chondro", #Cluster 12
+                     "Peri", #Cluster 13
+                     "removed", #Cluster 14 with high mito
+                     "removed" #Cluster 15 with high mito
+                     )
+Idents(suture_mes_mito_MAGIC) <- c("SCT_snn_res.0.6")
+suture_mes_mito_MAGIC@meta.data$seurat_clusters <-suture_mes_mito_MAGIC@meta.data$SCT_snn_res.0.6
+suture_mes_mito_MAGIC@meta.data$celltype<- suture_mes_mito_MAGIC@meta.data$seurat_clusters
+levels(suture_mes_mito_MAGIC@meta.data$celltype) <- new.cluster.ids
+```
+
+```{r,draft plot for celltype}
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T, group.by = "celltype")
+```
+
+```{r, initial plots}
+Idents(suture_mes_mito_MAGIC) <- c("celltype")
+#group_by_cluster
+plot1 = DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(suture_mes_mito_MAGIC, reduction = "umap", group.by = "celltype")
+plot3 = DimPlot(suture_mes_mito_MAGIC, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_umap_celltype.png", plot = plotc, width = 10, height = 5)
+plot3
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_umap_celltype_split.png", plot = plot3, width = 20, height = 5) # You may set the parameters, especially the "width". Usually each plot will take about 5.5 unit.
+
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", label = T)
+DimPlot(suture_mes_mito_MAGIC, reduction = "umap", group.by = "celltype")
+
+```
+
+```{r, output integrated data}
+saveRDS(suture_mes_mito_MAGIC, file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed.rds")
+```
+
+## 1.6 Dot plot for marker genes
+
+```{r}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito_MAGIC <- readRDS("./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed.rds")
+
+```
+
+```{r, check the order of celltype for display}
+levels(suture_mes_mito_MAGIC@meta.data$celltype)
+```
+
+
+We want to reorder the celltype, to make plot more apealing.
+```{r, re-order celltype}
+suture_mes_mito_MAGIC$celltype <- factor(suture_mes_mito_MAGIC$celltype, levels = c("Peri","Chondro","EC","LIG","PO","OG0","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4","MG5","removed")) 
+levels(suture_mes_mito_MAGIC$celltype)
+```
+
+
+```{r,dotplot for cell types,fig.height=4, fig.width=12}
+genes_to_check_mes <- c("Rgs5","Procr","Myh11","Gm13889",  #Peri
+                        "Col2a1","Mia","Mmp9","Acan", #Chondro
+                        "Pi16","Ly6a","Clc3b", #EC
+                        "Sfrp2","Tac1", "Scx","Igfbp3",#LIG
+                        "Stmn1","Hmgb2","Top2a","Mki67", #PO
+                        "Postn","Mmp13","Npnt","Podnl1", #OG1
+                        "Crip1","Tnn","Npnt","Tnc", #OG2
+                        "Bglap","Ibsp","Dmp1","Ifitm5", #OG3
+                        "Matn4","Cpz","Nppc","Fmod", #MG1
+                        "Crabp2","Gsta4","Slc4a10","Fxyd5",#MG2
+                        "Ppp1r10","Wsb1","Rasl11b","Irf1", #MG3
+                        "Ccl11","Il6","Igf1","Col4a1" #MG4
+                        )
+
+
+DotPlot(suture_mes_mito_MAGIC, features = unique(genes_to_check_mes),group.by = "celltype")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_harmony_dotplot_celltype.pdf",width = 15,height = 6)
+
+```
+
+
+
+```{r,dotplot for cell types blue red color,fig.height=4, fig.width=12}
+DotPlot(suture_mes_mito_MAGIC, features = unique(genes_to_check_mes),
+        cols = c("lightgrey","red"),col.min = 0, col.max = 3,
+        group.by = "celltype")+
+  RotatedAxis()+
+  scale_x_discrete("")+
+  scale_y_discrete("")
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_harmony_dotplot_celltype_red.pdf",width = 15,height = 6)
+
+
+```
+```{r, dotplot with different celltype, green and yellow,fig.height=6, fig.width=15}
+Idents(suture_mes_mito_MAGIC) <- suture_mes_mito_MAGIC$celltype
+DotPlot(suture_mes_mito_MAGIC, features=unique(genes_to_check_mes))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_harmony_dotplot_celltype_green.pdf",width = 15,height = 6)
+```
+
+## 1.7 Save renamed object
+```{r}
+saveRDS(suture_mes_mito_MAGIC, file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed.rds")
+```
+
+
+# 2 3D output for UMAP
+```{r}
+
+rm(list=ls())
+
+
+suture_mes_mito_MAGIC <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed.rds")
+gc()
+```
+Here we redo the dimension reduction from three layers.
+```{r}
+suture_mes_mito_MAGIC <- RunUMAP(object = suture_mes_mito_MAGIC, assay = "MAGIC_SCT", reduction = "harmony", dims = 1:50,
+                                 n.components = 3L) #You may probe dims in details
+```
+```{r}
+tmp.umap.3<-Embeddings(object = suture_mes_mito_MAGIC[["umap"]])
+levels(suture_mes_mito_MAGIC$celltype) # check the levels for celltype
+```
+
+Prepare color codes for each celltype
+```{r}
+cb_palette <- c("#FF66A8", #Peri
+                "#FB61D7", #Chondro
+                "#DF70F8", #EC
+                "#F8766D", #LIG
+                "#00BFC4", #PO
+                "#00BC56", #OG0
+                "#E38900", #OG1
+                "#C49A00", #OG2
+                "#A58AFF", #OG3
+                "#99A800", #MG1
+                "#00C094", #MG2
+                "#53B400", #MG3
+                "#06A4FF", #MG4
+                "#00B6EB", #MG5
+                "#00B6EB"  #removed
+                )      
+```
+
+## 2.1 3D UMAP 
+```{r}
+library(plotly)
+tmp.umap.3 <- as.data.frame(tmp.umap.3)
+fig <- plot_ly(tmp.umap.3, x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, color =suture_mes_mito_MAGIC$celltype, 
+               colors = cb_palette,
+               opacity = .5,
+               type = "scatter3d", 
+               size=0.5)
+fig
+```
+We subset OG (including PO, OG1, OG2 and OG3) in the 3D umap plot.
+
+## 2.2 3D genes of interest
+```{r, 3D plot for Runx2}
+# create a dataframe
+goi <- "Runx2"
+DefaultAssay(suture_mes_mito_MAGIC) <- "MAGIC_SCT"
+plotting.data <- FetchData(object = suture_mes_mito_MAGIC, vars = c("UMAP_1", "UMAP_2", "UMAP_3", "Expression"=goi), slot = 'data')
+
+# Say you want change the scale, so that every cell having an expression >1 will be one color
+# Basically, you are re-adjusting the scale here, so that any cell having a certain expression will light up on your 3D plot
+
+# First make another column in your dataframe, where all values above 1 are re-assigned a value of 1
+# This information is stored in the 'Expression' column of your dataframe
+# Cutoff <- 2
+Cutoff <- quantile(plotting.data[,goi], probs = .99)
+plotting.data$"ExprCutoff" <- ifelse(test = plotting.data[,goi] <Cutoff, yes = plotting.data[,goi], no = Cutoff)
+
+# Add the label column, so that now the column has 'cellname-its expression value'
+plotting.data$label <- paste(rownames(plotting.data)," - ", plotting.data[,goi], sep="")
+
+# Plot your data, in this example my Seurat object had 21 clusters (0-20), and cells express a gene called Odam
+plot_ly(data = plotting.data,
+        # name = goi,
+        x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, 
+        color = ~ExprCutoff, # you can just run this against the column for the gene as well using ~Odam, the algorith will automatically scale in that case based on maximal and minimal values
+        opacity = .5,
+        colors = c("#ddf4f5", "#fa3c84"), 
+        type = "scatter3d", 
+        mode = "markers",
+        marker = list(size = 2), 
+        text=~label,
+        hoverinfo="text"
+) %>%layout(title=goi)
+```
+
+```{r, 3D plot for Bglap}
+# create a dataframe
+goi <- "Bglap"
+plotting.data <- FetchData(object = suture_mes_mito_MAGIC, vars = c("UMAP_1", "UMAP_2", "UMAP_3", "Expression"=goi), slot = 'data')
+
+# Say you want change the scale, so that every cell having an expression >1 will be one color
+# Basically, you are re-adjusting the scale here, so that any cell having a certain expression will light up on your 3D plot
+
+# First make another column in your dataframe, where all values above 1 are re-assigned a value of 1
+# This information is stored in the 'Expression' column of your dataframe
+# Cutoff <- 2
+Cutoff <- quantile(plotting.data[,goi], probs = .99)
+plotting.data$"ExprCutoff" <- ifelse(test = plotting.data[,goi] <Cutoff, yes = plotting.data[,goi], no = Cutoff)
+
+# Add the label column, so that now the column has 'cellname-its expression value'
+plotting.data$label <- paste(rownames(plotting.data)," - ", plotting.data[,goi], sep="")
+
+# Plot your data, in this example my Seurat object had 21 clusters (0-20), and cells express a gene called Cxcl5
+plot_ly(data = plotting.data,
+        # name = goi,
+        x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, 
+        color = ~ExprCutoff, # you can just run this against the column for the gene as well using ~Odam, the algorith will automatically scale in that case based on maximal and minimal values
+        opacity = .5,
+        colors = c("#ddf4f5", "#fa3c84"), 
+        type = "scatter3d", 
+        mode = "markers",
+        marker = list(size = 2), 
+        text=~label,
+        hoverinfo="text"
+) %>%layout(title=goi)
+```
+
+```{r, 3D plot for Ibsp}
+# create a dataframe
+goi <- "Ibsp"
+plotting.data <- FetchData(object = suture_mes_mito_MAGIC, vars = c("UMAP_1", "UMAP_2", "UMAP_3", "Expression"=goi), slot = 'data')
+
+# Say you want change the scale, so that every cell having an expression >1 will be one color
+# Basically, you are re-adjusting the scale here, so that any cell having a certain expression will light up on your 3D plot
+
+# First make another column in your dataframe, where all values above 1 are re-assigned a value of 1
+# This information is stored in the 'Expression' column of your dataframe
+# Cutoff <- 2
+Cutoff <- quantile(plotting.data[,goi], probs = .99)
+plotting.data$"ExprCutoff" <- ifelse(test = plotting.data[,goi] <Cutoff, yes = plotting.data[,goi], no = Cutoff)
+
+# Add the label column, so that now the column has 'cellname-its expression value'
+plotting.data$label <- paste(rownames(plotting.data)," - ", plotting.data[,goi], sep="")
+
+# Plot your data, in this example my Seurat object had 21 clusters (0-20), and cells express a gene called Axin2
+plot_ly(data = plotting.data,
+        # name = goi,
+        x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, 
+        color = ~ExprCutoff, # you can just run this against the column for the gene as well using ~Axin2, the algorith will automatically scale in that case based on maximal and minimal values
+        opacity = .5,
+        colors = c("#ddf4f5", "#fa3c84"), 
+        type = "scatter3d", 
+        mode = "markers",
+        marker = list(size = 2), 
+        text=~label,
+        hoverinfo="text"
+) %>%layout(title=goi)
+```
+```{r, 3D plot for Top2a}
+# create a dataframe
+goi <- "Top2a"
+plotting.data <- FetchData(object = suture_mes_mito_MAGIC, vars = c("UMAP_1", "UMAP_2", "UMAP_3", "Expression"=goi), slot = 'data')
+
+# Say you want change the scale, so that every cell having an expression >1 will be one color
+# Basically, you are re-adjusting the scale here, so that any cell having a certain expression will light up on your 3D plot
+
+# First make another column in your dataframe, where all values above 1 are re-assigned a value of 1
+# This information is stored in the 'Expression' column of your dataframe
+# Cutoff <- 2
+Cutoff <- quantile(plotting.data[,goi], probs = .99)
+plotting.data$"ExprCutoff" <- ifelse(test = plotting.data[,goi] <Cutoff, yes = plotting.data[,goi], no = Cutoff)
+
+# Add the label column, so that now the column has 'cellname-its expression value'
+plotting.data$label <- paste(rownames(plotting.data)," - ", plotting.data[,goi], sep="")
+
+# Plot your data, in this example my Seurat object had 21 clusters (0-20), and cells express a gene called ACTB
+plot_ly(data = plotting.data,
+        # name = goi,
+        x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3, 
+        color = ~ExprCutoff, # you can just run this against the column for the gene as well using ~ACTB, the algorith will automatically scale in that case based on maximal and minimal values
+        opacity = .5,
+        colors = c("#ddf4f5", "#fa3c84"), 
+        type = "scatter3d", 
+        mode = "markers",
+        marker = list(size = 2), 
+        text=~label,
+        hoverinfo="text"
+) %>%layout(title=goi)
+```
+
+
+## 2.3 Save the 3D Seurat Object output
+```{r}
+saveRDS(suture_mes_mito_MAGIC, "./SeuratObject/suture_mes_mito_MAGIC_3D.rds")
+
+```
+
+
+
+
+# 3 Generate scVelo attributes
+Here we will generate input for python-based scVelo analysis
+## 3.0 Load packages and datasets
+```{r,Load packages and datasets 5}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito_MAGIC <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed.rds")
+
+```
+
+Split by PF or SAG
+
+```{r, check the plot based on group}
+plots <- DimPlot(suture_mes_mito_MAGIC, group.by = c("group", "celltype"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+
+```{r, oject split and saved }
+suture_mes_mito_MAGIC_list <- SplitObject(suture_mes_mito_MAGIC, split.by = "group")
+suture_mes_mito_MAGIC_PF <-suture_mes_mito_MAGIC_list[["PF"]]
+saveRDS(suture_mes_mito_MAGIC_PF, file = "./SeuratObject/suture_mes_mito_MAGIC_PF_seurat_20230330.rds")
+suture_mes_mito_MAGIC_SAG <-suture_mes_mito_MAGIC_list[["SAG"]]
+saveRDS(suture_mes_mito_MAGIC_SAG, file = "./SeuratObject/suture_mes_mito_MAGIC_SAG_seurat_20230330.rds")
+
+```
+
+
+
+## 3.1 Cell attribute matrix for MAGIC object
+```{r, prepare parameter matrix of suture_mes_mito_MAGIC for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC))
+head(suture_mes_mito_MAGIC_cells)
+write.csv(suture_mes_mito_MAGIC_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC <- Embeddings(suture_mes_mito_MAGIC, reduction = "umap")
+head(suture_mes_mito_MAGIC)
+umap_suture_mes_mito_MAGIC[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC, file = "./scVeloInput/suture_mes_mito_MAGIC_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_cells$`Cells(suture_mes_mito_MAGIC)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_clusters.csv",row.names = FALSE)
+```
+
+## 3.2 Cell attribute matrix for MAGIC_PF object
+```{r, prepare parameter matrix of combined PF for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_PF_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_PF))
+head(suture_mes_mito_MAGIC_PF_cells)
+write.csv(suture_mes_mito_MAGIC_PF_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_PF_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_PF <- Embeddings(suture_mes_mito_MAGIC_PF, reduction = "umap")
+head(suture_mes_mito_MAGIC_PF)
+umap_suture_mes_mito_MAGIC_PF[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_PF, file = "./scVeloInput/suture_mes_mito_MAGIC_PF_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_PF@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_PF@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_PF_cells$`Cells(suture_mes_mito_MAGIC_PF)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_PF_clusters.csv",row.names = FALSE)
+```
+
+
+## 3.3 Cell attribute matrix for MAGIC_SAG object
+```{r, prepare parameter matrix of combined SAG for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_SAG_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_SAG))
+head(suture_mes_mito_MAGIC_SAG_cells)
+write.csv(suture_mes_mito_MAGIC_SAG_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_SAG_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_SAG <- Embeddings(suture_mes_mito_MAGIC_SAG, reduction = "umap")
+head(suture_mes_mito_MAGIC_SAG)
+umap_suture_mes_mito_MAGIC_SAG[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_SAG, file = "./scVeloInput/suture_mes_mito_MAGIC_SAG_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_SAG@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_SAG@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_SAG_cells$`Cells(suture_mes_mito_MAGIC_SAG)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_SAG_clusters.csv",row.names = FALSE)
+```
+##3.4 Split by orig.ident
+```{r,Load packages and datasets 5}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito_MAGIC <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed.rds")
+
+```
+
+Split by orig.ident
+
+```{r, check the plot based on orig.ident}
+plots <- DimPlot(suture_mes_mito_MAGIC, group.by = c("orig.ident", "celltype"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+```{r}
+table(suture_mes_mito_MAGIC$orig.ident)
+```
+
+
+```{r, oject split and saved }
+suture_mes_mito_MAGIC_list <- SplitObject(suture_mes_mito_MAGIC, split.by = "orig.ident")
+
+suture_mes_mito_MAGIC_DM_PF <-suture_mes_mito_MAGIC_list[["DM_PF"]]
+saveRDS(suture_mes_mito_MAGIC_DM_PF, file = "./SeuratObject/suture_mes_mito_MAGIC_DM_PF_seurat_20230330.rds")
+
+suture_mes_mito_MAGIC_DM_SAG <-suture_mes_mito_MAGIC_list[["DM_SAG"]]
+saveRDS(suture_mes_mito_MAGIC_DM_SAG, file = "./SeuratObject/suture_mes_mito_MAGIC_DM_SAG_seurat_20230330.rds")
+
+suture_mes_mito_MAGIC_KO_PF <-suture_mes_mito_MAGIC_list[["KO_PF"]]
+saveRDS(suture_mes_mito_MAGIC_KO_PF, file = "./SeuratObject/suture_mes_mito_MAGIC_KO_PF_seurat_20230330.rds")
+
+suture_mes_mito_MAGIC_KO_SAG <-suture_mes_mito_MAGIC_list[["KO_SAG"]]
+saveRDS(suture_mes_mito_MAGIC_KO_SAG, file = "./SeuratObject/suture_mes_mito_MAGIC_KO_SAG_seurat_20230330.rds")
+
+suture_mes_mito_MAGIC_Runx2_PF <-suture_mes_mito_MAGIC_list[["Runx2_PF"]]
+saveRDS(suture_mes_mito_MAGIC_Runx2_PF, file = "./SeuratObject/suture_mes_mito_MAGIC_Runx2_PF_seurat_20230330.rds")
+
+suture_mes_mito_MAGIC_Runx2_SAG <-suture_mes_mito_MAGIC_list[["Runx2_SAG"]]
+saveRDS(suture_mes_mito_MAGIC_Runx2_SAG, file = "./SeuratObject/suture_mes_mito_MAGIC_Runx2_SAG_seurat_20230330.rds")
+
+suture_mes_mito_MAGIC_WT_PF <-suture_mes_mito_MAGIC_list[["WT_PF"]]
+saveRDS(suture_mes_mito_MAGIC_WT_PF, file = "./SeuratObject/suture_mes_mito_MAGIC_WT_PF_seurat_20230330.rds")
+
+suture_mes_mito_MAGIC_WT_SAG <-suture_mes_mito_MAGIC_list[["WT_SAG"]]
+saveRDS(suture_mes_mito_MAGIC_WT_SAG, file = "./SeuratObject/suture_mes_mito_MAGIC_WT_SAG_seurat_20230330.rds")
+
+
+rm(suture_mes_mito_MAGIC_list)
+```
+
+
+```{r, prepare parameter matrix of combined DM_SAG for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_DM_SAG_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_DM_SAG))
+head(suture_mes_mito_MAGIC_DM_SAG_cells)
+write.csv(suture_mes_mito_MAGIC_DM_SAG_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_DM_SAG_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_DM_SAG <- Embeddings(suture_mes_mito_MAGIC_DM_SAG, reduction = "umap")
+head(suture_mes_mito_MAGIC_DM_SAG)
+umap_suture_mes_mito_MAGIC_DM_SAG[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_DM_SAG, file = "./scVeloInput/suture_mes_mito_MAGIC_DM_SAG_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_DM_SAG@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_DM_SAG@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_DM_SAG_cells$`Cells(suture_mes_mito_MAGIC_DM_SAG)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_DM_SAG_clusters.csv",row.names = FALSE)
+rm(suture_mes_mito_MAGIC_DM_SAG)
+```
+
+```{r, prepare parameter matrix of combined WT_SAG for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_WT_SAG_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_WT_SAG))
+head(suture_mes_mito_MAGIC_WT_SAG_cells)
+write.csv(suture_mes_mito_MAGIC_WT_SAG_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_WT_SAG_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_WT_SAG <- Embeddings(suture_mes_mito_MAGIC_WT_SAG, reduction = "umap")
+head(suture_mes_mito_MAGIC_WT_SAG)
+umap_suture_mes_mito_MAGIC_WT_SAG[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_WT_SAG, file = "./scVeloInput/suture_mes_mito_MAGIC_WT_SAG_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_WT_SAG@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_WT_SAG@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_WT_SAG_cells$`Cells(suture_mes_mito_MAGIC_WT_SAG)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_WT_SAG_clusters.csv",row.names = FALSE)
+rm(suture_mes_mito_MAGIC_WT_SAG)
+```
+
+```{r, prepare parameter matrix of combined KO_SAG for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_KO_SAG_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_KO_SAG))
+head(suture_mes_mito_MAGIC_KO_SAG_cells)
+write.csv(suture_mes_mito_MAGIC_KO_SAG_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_KO_SAG_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_KO_SAG <- Embeddings(suture_mes_mito_MAGIC_KO_SAG, reduction = "umap")
+head(suture_mes_mito_MAGIC_KO_SAG)
+umap_suture_mes_mito_MAGIC_KO_SAG[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_KO_SAG, file = "./scVeloInput/suture_mes_mito_MAGIC_KO_SAG_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_KO_SAG@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_KO_SAG@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_KO_SAG_cells$`Cells(suture_mes_mito_MAGIC_KO_SAG)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_KO_SAG_clusters.csv",row.names = FALSE)
+rm(suture_mes_mito_MAGIC_KO_SAG)
+```
+
+```{r, prepare parameter matrix of combined Runx2_SAG for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_Runx2_SAG_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_Runx2_SAG))
+head(suture_mes_mito_MAGIC_Runx2_SAG_cells)
+write.csv(suture_mes_mito_MAGIC_Runx2_SAG_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_Runx2_SAG_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_Runx2_SAG <- Embeddings(suture_mes_mito_MAGIC_Runx2_SAG, reduction = "umap")
+head(suture_mes_mito_MAGIC_Runx2_SAG)
+umap_suture_mes_mito_MAGIC_Runx2_SAG[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_Runx2_SAG, file = "./scVeloInput/suture_mes_mito_MAGIC_Runx2_SAG_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_Runx2_SAG@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_Runx2_SAG@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_Runx2_SAG_cells$`Cells(suture_mes_mito_MAGIC_Runx2_SAG)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_Runx2_SAG_clusters.csv",row.names = FALSE)
+
+rm(suture_mes_mito_MAGIC_Runx2_SAG)
+```
+
+```{r, prepare parameter matrix of combined Runx2_PF for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_Runx2_PF_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_Runx2_PF))
+head(suture_mes_mito_MAGIC_Runx2_PF_cells)
+write.csv(suture_mes_mito_MAGIC_Runx2_PF_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_Runx2_PF_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_Runx2_PF <- Embeddings(suture_mes_mito_MAGIC_Runx2_PF, reduction = "umap")
+head(suture_mes_mito_MAGIC_Runx2_PF)
+umap_suture_mes_mito_MAGIC_Runx2_PF[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_Runx2_PF, file = "./scVeloInput/suture_mes_mito_MAGIC_Runx2_PF_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_Runx2_PF@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_Runx2_PF@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_Runx2_PF_cells$`Cells(suture_mes_mito_MAGIC_Runx2_PF)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_Runx2_PF_clusters.csv",row.names = FALSE)
+
+rm(suture_mes_mito_MAGIC_Runx2_PF)
+```
+
+```{r, prepare parameter matrix of combined KO_PF for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_KO_PF_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_KO_PF))
+head(suture_mes_mito_MAGIC_KO_PF_cells)
+write.csv(suture_mes_mito_MAGIC_KO_PF_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_KO_PF_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_KO_PF <- Embeddings(suture_mes_mito_MAGIC_KO_PF, reduction = "umap")
+head(suture_mes_mito_MAGIC_KO_PF)
+umap_suture_mes_mito_MAGIC_KO_PF[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_KO_PF, file = "./scVeloInput/suture_mes_mito_MAGIC_KO_PF_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_KO_PF@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_KO_PF@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_KO_PF_cells$`Cells(suture_mes_mito_MAGIC_KO_PF)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_KO_PF_clusters.csv",row.names = FALSE)
+
+rm(suture_mes_mito_MAGIC_KO_PF)
+```
+
+```{r, prepare parameter matrix of combined WT_PF for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_WT_PF_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_WT_PF))
+head(suture_mes_mito_MAGIC_WT_PF_cells)
+write.csv(suture_mes_mito_MAGIC_WT_PF_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_WT_PF_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_WT_PF <- Embeddings(suture_mes_mito_MAGIC_WT_PF, reduction = "umap")
+head(suture_mes_mito_MAGIC_WT_PF)
+umap_suture_mes_mito_MAGIC_WT_PF[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_WT_PF, file = "./scVeloInput/suture_mes_mito_MAGIC_WT_PF_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_WT_PF@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_WT_PF@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_WT_PF_cells$`Cells(suture_mes_mito_MAGIC_WT_PF)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_WT_PF_clusters.csv",row.names = FALSE)
+
+rm(suture_mes_mito_MAGIC_WT_PF)
+```
+
+```{r, prepare parameter matrix of combined DM_PF for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_DM_PF_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_DM_PF))
+head(suture_mes_mito_MAGIC_DM_PF_cells)
+write.csv(suture_mes_mito_MAGIC_DM_PF_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_DM_PF_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_DM_PF <- Embeddings(suture_mes_mito_MAGIC_DM_PF, reduction = "umap")
+head(suture_mes_mito_MAGIC_DM_PF)
+umap_suture_mes_mito_MAGIC_DM_PF[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_DM_PF, file = "./scVeloInput/suture_mes_mito_MAGIC_DM_PF_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_DM_PF@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_DM_PF@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_DM_PF_cells$`Cells(suture_mes_mito_MAGIC_DM_PF)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_DM_PF_clusters.csv",row.names = FALSE)
+
+rm(suture_mes_mito_MAGIC_DM_PF)
+```
+
+# 4 Differential population analysis for SAG 
+## 4.0 Load environment, packages and dataset
+```{r load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito_MAGIC_SAG <- readRDS("./SeuratObject/suture_mes_mito_MAGIC_SAG_seurat_20230330.rds")
+
+```
+
+Check the sequence of levels and marker gene expression
+```{r,dotplot for cell types blue red color,fig.height=4, fig.width=12}
+genes_to_check_mes <- c("Rgs5","Procr","Myh11","Gm13889",  #Peri
+                        "Col2a1","Mia","Mmp9","Acan", #Chondro
+                        "Pi16","Ly6a","Clc3b", #EC
+                        "Sfrp2","Tac1", "Scx","Igfbp3",#LIG
+                        "Stmn1","Hmgb2","Top2a","Mki67", #PO
+                        "Postn","Mmp13","Npnt","Podnl1", #OG1
+                        "Crip1","Tnn","Npnt","Tnc", #OG2
+                        "Bglap","Ibsp","Dmp1","Ifitm5", #OG3
+                        "Matn4","Cpz","Nppc","Fmod", #MG1
+                        "Crabp2","Gsta4","Slc4a10","Fxyd5",#MG2
+                        "Ppp1r10","Wsb1","Rasl11b","Irf1", #MG3
+                        "Ccl11","Il6","Igf1","Col4a1" #MG4
+                        )
+
+DotPlot(suture_mes_mito_MAGIC_SAG, features = unique(genes_to_check_mes),
+        cols = c("lightgrey","red"),col.min = 0, col.max = 3,
+        group.by = "celltype")+
+  RotatedAxis()+
+  scale_x_discrete("")+
+  scale_y_discrete("")
+
+#ggsave("./OutputFigure/suture_mes_mito_harmony_dotplot_celltype_red.pdf",width = 15,height = 6)
+
+
+```
+
+## 4.1 Mannual comparison
+
+
+```{r, pull the number of cells in each celltype from the integrated PF eobject}
+Idents(suture_mes_mito_MAGIC_SAG)<-suture_mes_mito_MAGIC_SAG$celltype
+## extract meta data
+md <- suture_mes_mito_MAGIC_SAG@meta.data %>% as.data.table 
+md  ## the resulting md object has one "row" per cell
+
+## count the number of cells per unique combinations of "orig.ident" and "celltype"
+md[, .N, by = c("orig.ident", "celltype")]
+
+
+## with additional casting after the counting
+split_count <- md[, .N, by = c("orig.ident", "celltype")] %>% dcast(., orig.ident ~ celltype, value.var = "N")
+split_count
+split_count[is.na(split_count)] = 0
+split_count_melt <- melt(split_count,
+                         id.vars ="orig.ident",
+                         variable.name = "celltype",
+                         value.name = "Number")
+split_count_melt
+write.csv(split_count_melt, file = "./OutputTable/suture_mes_mito_MAGIC_SAG_suture_harmony_cell_number_celltype.csv", row.names = FALSE)
+```
+
+
+```{r}
+## Generate a stack-bar plot (refer to "https://www.geeksforgeeks.org/grouped-stacked-and-percent-stacked-barplot-in-ggplot2/")
+as.factor(split_count_melt$celltype)
+levels(split_count_melt$celltype)
+
+levels(split_count_melt$celltype)
+ggplot(split_count_melt, aes(fill = orig.ident,x=celltype,y=Number))+
+geom_bar(position = "fill", stat = "identity")+
+ggtitle("Percentage of cells in each cluster")+
+  xlab("celltype")+
+  ylab("Percentage of cells")
+theme(plot.title = element_text(hjust = 0.5))
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_suture_harmony_Percentage_cell_in_each_celltype_unnormalized.pdf", height = 3, width = 8)
+```
+
+```{r, normalized to total number in each celltype}
+##Percent count
+
+split_count$total <-apply(split_count[,c(2:15)], 1, sum) # add `total` to the last column, 15 is the number of columns
+split_count_noname <- split_count[,-1] 
+split_count_mut <- mutate_all(split_count_noname, funs("percent" = ./split_count$total*100))
+split_count_mut_2 <- cbind(split_count[,1],split_count_mut)
+split_count_mut_3 <- split_count_mut_2[,-c(2:16,31)] # remove the number (2:14) and Total percentage (number of columns:27)
+colnames(split_count_mut_3) <- gsub("_percent", "",colnames(split_count_mut_3))
+split_count_mut_3
+write.csv(split_count_mut_3, file="./OutputTable/suture_mes_mito_MAGIC_SAG_suture_harmony_cell_percentage_celltype_unmelt.csv", row.names = FALSE)
+split_count_mut_melt <- melt(split_count_mut_3,
+                         id.vars ="orig.ident",
+                         variable.name = "celltype",
+                         value.name = "Percentage")
+split_count_mut_melt
+write.csv(split_count_mut_melt, file = "./OutputTable/suture_mes_mito_MAGIC_SAG_suture_harmony_cell_percentage_celltype.csv", row.names = FALSE)
+## Generate a stack-bar plot for percentage of cells
+as.factor(split_count_mut_melt$celltype)
+# Re order the levels
+#split_count_mut_melt[,celltype:=fct_relevel(split_count_mut_melt$celltype,"Peri","Chondro","EC","LIG","PO","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4")]
+ggplot(split_count_mut_melt, aes(fill = orig.ident,x=celltype,y=Percentage))+
+geom_bar(position = "fill", stat = "identity")+
+ggtitle("Percentage of cells in each celltype")+
+  xlab("celltype")+
+  ylab("Percentage of cells")
+theme(plot.title = element_text(hjust = 0.5))
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_suture_harmony_Percentage_cell_in_each_celltype_normalized.pdf", height = 3, width = 8)
+
+ggplot(split_count_mut_melt, aes(x = celltype, y =Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black") + theme_bw()+ theme(panel.grid = element_blank())
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_suture_harmony_Percentage_cell_in_each_celltype_normalized_stack.pdf", height = 3, width = 18)
+
+ggplot(split_count_mut_melt, aes(x = celltype, y =Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black", position = "dodge") + theme_bw()+ theme(panel.grid = element_blank())
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_suture_harmony_Percentage_cell_in_each_celltype_normalized_dodge2.pdf", height = 3, width = 18)
+
+```
+## 4.2 DPA approach
+
+```{r, source functions for DPA assay}
+source("diffprop_functions.R")
+```
+
+```{r, generate the table of cell number}
+## Read in file of counts of cells in each population across conditions
+
+obs.counts <- md[, .N, by = c("orig.ident", "celltype")] %>% dcast(., orig.ident ~ celltype, value.var = "N")
+obs.counts[is.na(obs.counts)] = 0
+obs.counts <- obs.counts %>% remove_rownames %>% column_to_rownames(var="orig.ident")
+write.csv(obs.counts, file = "./OutputTable/suture_mes_mito_MAGIC_SAG_test.csv", row.names = TRUE)
+# Download and double check if the first column is the name for orig.ident.
+
+```
+
+
+```{r, DPA}
+obs.counts = as.matrix(read.csv("./OutputTable/suture_mes_mito_MAGIC_SAG_test.csv", row.names = 1))
+print(obs.counts)
+## Run an example using error (p) of 0.1 and with 100,000 iterations
+tip.exp <- generateNull(obs.counts, n=100000, p=0.1);     # Generate the null distribution based on sampling
+
+obs.counts/apply(obs.counts, 1, sum)
+
+### P-value tests for DM_SAG vs WT_SAG
+two.class.test(obs.counts, tip.exp, cond.control="WT_SAG", cond.treatment="DM_SAG",to.plot=F)
+
+### P-value tests for KO_SAG vs WT_SAG
+two.class.test(obs.counts, tip.exp, cond.control="WT_SAG", cond.treatment="KO_SAG",to.plot=F)
+
+### P-value tests for Runx2_SAG vs WT_SAG
+two.class.test(obs.counts, tip.exp, cond.control="WT_SAG", cond.treatment="Runx2_SAG",to.plot=F)
+
+### P-value tests for DM_SAG vs Runx2_SAG
+two.class.test(obs.counts, tip.exp, cond.control="Runx2_SAG", cond.treatment="DM_SAG",to.plot=F)
+
+### P-value tests for KO_SAG vs Runx2_SAG
+two.class.test(obs.counts, tip.exp, cond.control="Runx2_SAG", cond.treatment="KO_SAG",to.plot=F)
+
+### P-value tests for DM_SAG vs KO_SAG
+two.class.test(obs.counts, tip.exp, cond.control="KO_SAG", cond.treatment="DM_SAG",to.plot=F)
+
+
+```
+
+
+```{r, Get a table of P-values for a range of p values }
+
+res.table.DM_SAGvsWT_SAG = c()
+res.table.KO_SAGvsWT_SAG = c()
+res.table.Runx2_SAGvsWT_SAG = c()
+res.table.DM_SAGvsRunx2_SAG = c()
+res.table.KO_SAGvsRunx2_SAG = c()
+res.table.DM_SAGvsKO_SAG = c()
+
+
+## Go through a series of error probabilities
+for (err_prob in c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05)) {
+  tip.exp <- generateNull(obs.counts, n=100000, p=err_prob);
+  ## DM_SAG vs WT_SAG
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="WT_SAG", cond.treatment="DM_SAG",to.plot=F)
+  res.table.DM_SAGvsWT_SAG = rbind(res.table.DM_SAGvsWT_SAG, res.1)
+  ## KO_SAG vs WT_SAG
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="WT_SAG", cond.treatment="KO_SAG",to.plot=F)
+  res.table.KO_SAGvsWT_SAG = rbind(res.table.KO_SAGvsWT_SAG, res.1)
+  ## Runx2_SAG vs WT_SAG
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="WT_SAG", cond.treatment="Runx2_SAG",to.plot=F)
+  res.table.Runx2_SAGvsWT_SAG = rbind(res.table.Runx2_SAGvsWT_SAG, res.1)
+  ## DM_SAG vs Runx2_SAG
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="Runx2_SAG", cond.treatment="DM_SAG",to.plot=F)
+  res.table.DM_SAGvsRunx2_SAG = rbind(res.table.DM_SAGvsRunx2_SAG, res.1)
+  ## KO_SAG vs Runx2_SAG
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="Runx2_SAG", cond.treatment="KO_SAG",to.plot=F)
+  res.table.KO_SAGvsRunx2_SAG = rbind(res.table.KO_SAGvsRunx2_SAG, res.1)
+  ## DM_SAG vs KO_SAG
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="KO_SAG", cond.treatment="DM_SAG",to.plot=F)
+  res.table.DM_SAGvsKO_SAG = rbind(res.table.DM_SAGvsKO_SAG, res.1)
+ 
+}
+
+rownames(res.table.DM_SAGvsWT_SAG) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.DM_SAGvsWT_SAG, file = "./OutputTable/suture_mes_mito_MAGIC_SAG_suture_res.table.DM_SAGvsWT_SAG.csv", row.names = TRUE)
+rownames(res.table.KO_SAGvsWT_SAG) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.KO_SAGvsWT_SAG, file = "./OutputTable/suture_mes_mito_MAGIC_SAG_suture_res.table.KO_SAGvsWT_SAG.csv", row.names = TRUE)
+rownames(res.table.Runx2_SAGvsWT_SAG) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.Runx2_SAGvsWT_SAG, file = "./OutputTable/suture_mes_mito_MAGIC_SAG_suture_res.table.Runx2_SAGvsWT_SAG.csv", row.names = TRUE)
+rownames(res.table.DM_SAGvsRunx2_SAG) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.DM_SAGvsRunx2_SAG, file = "./OutputTable/suture_mes_mito_MAGIC_SAG_suture_res.table.DM_SAGvsRunx2_SAG.csv", row.names = TRUE)
+rownames(res.table.KO_SAGvsRunx2_SAG) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.KO_SAGvsRunx2_SAG, file = "./OutputTable/suture_mes_mito_MAGIC_SAG_suture_res.table.KO_SAGvsRunx2_SAG.csv", row.names = TRUE)
+rownames(res.table.DM_SAGvsKO_SAG) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.DM_SAGvsKO_SAG, file = "./OutputTable/suture_mes_mito_MAGIC_SAG_suture_res.table.DM_SAGvsKO_SAG.csv", row.names = TRUE)
+
+```
+highlight cluster of interest: OG3
+First, we will order the color code for each celltype, then use Dimplot to color OG3
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_SAG$celltype)
+colors <- c("grey","grey","grey","grey","grey",
+            "grey","grey","#619CFF","grey","grey",
+            "grey","grey")
+DimPlot(suture_mes_mito_MAGIC_SAG, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG3_highlighted.pdf", device = "pdf", width = 3, height = 3)
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG3_highlighted_nolabel.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG3_highlighted_split_nolabel.png", device = "png", width = 12, height = 3)
+```
+For OG2
+highlight cluster of interest: OG2
+First, we will order the color code for each celltype, then use Dimplot to color OG2
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_SAG$celltype)
+colors <- c("grey","grey","grey","grey","grey",
+            "grey","#00BA38","grey","grey","grey",
+            "grey","grey")
+DimPlot(suture_mes_mito_MAGIC_SAG, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG2_highlighted.pdf", device = "pdf", width = 3, height = 3)
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG2_highlighted_nolabel.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG2_highlighted_split_nolabel.png", device = "png", width = 12, height = 3)
+```
+
+highlight cluster of interest: OG1
+First, we will order the color code for each celltype, then use Dimplot to color OG1
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_SAG$celltype)
+colors <- c("grey","grey","grey","grey","grey",
+            "#DE8C00","grey","grey","grey","grey",
+            "grey","grey")
+DimPlot(suture_mes_mito_MAGIC_SAG, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG1_highlighted.pdf", device = "pdf", width = 3, height = 3)
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG1_highlighted_nolabel.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_SAG, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_SAG_OG1_highlighted_split_nolabel.png", device = "png", width = 3, height = 3)
+```
+
+
+# 5 Differential population analysis for PF
+## 5.0 Load environment, packages and dataset
+```{r load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito_MAGIC_PF <- readRDS("./SeuratObject/suture_mes_mito_MAGIC_PF_seurat_20230330.rds")
+
+```
+
+Check the sequence of levels and marker gene expression
+```{r,dotplot for cell types blue red color,fig.height=4, fig.width=12}
+genes_to_check_mes <- c("Rgs5","Procr","Myh11","Gm13889",  #Peri
+                        "Col2a1","Mia","Mmp9","Acan", #Chondro
+                        "Pi16","Ly6a","Clc3b", #EC
+                        "Sfrp2","Tac1", "Scx","Igfbp3",#LIG
+                        "Stmn1","Hmgb2","Top2a","Mki67", #PO
+                        "Postn","Mmp13","Npnt","Podnl1", #OG1
+                        "Crip1","Tnn","Npnt","Tnc", #OG2
+                        "Bglap","Ibsp","Dmp1","Ifitm5", #OG3
+                        "Matn4","Cpz","Nppc","Fmod", #MG1
+                        "Crabp2","Gsta4","Slc4a10","Fxyd5",#MG2
+                        "Ppp1r10","Wsb1","Rasl11b","Irf1", #MG3
+                        "Ccl11","Il6","Igf1","Col4a1" #MG4
+                        )
+
+DotPlot(suture_mes_mito_MAGIC_PF, features = unique(genes_to_check_mes),
+        cols = c("lightgrey","red"),col.min = 0, col.max = 3,
+        group.by = "celltype")+
+  RotatedAxis()+
+  scale_x_discrete("")+
+  scale_y_discrete("")
+
+#ggsave("./OutputFigure/suture_mes_mito_harmony_dotplot_celltype_red.pdf",width = 15,height = 6)
+
+
+```
+## 5.1 Mannual comparison
+
+
+```{r, pull the number of cells in each celltype from the integrated PF eobject}
+Idents(suture_mes_mito_MAGIC_PF)<-suture_mes_mito_MAGIC_PF$celltype
+## extract meta data
+md <- suture_mes_mito_MAGIC_PF@meta.data %>% as.data.table 
+md  ## the resulting md object has one "row" per cell
+
+## count the number of cells per unique combinations of "orig.ident" and "celltype"
+md[, .N, by = c("orig.ident", "celltype")]
+
+
+## with additional casting after the counting
+split_count <- md[, .N, by = c("orig.ident", "celltype")] %>% dcast(., orig.ident ~ celltype, value.var = "N")
+split_count
+split_count[is.na(split_count)] = 0
+split_count_melt <- melt(split_count,
+                         id.vars ="orig.ident",
+                         variable.name = "celltype",
+                         value.name = "Number")
+split_count_melt
+write.csv(split_count_melt, file = "./OutputTable/suture_mes_mito_MAGIC_PF_suture_harmony_cell_number_celltype.csv", row.names = FALSE)
+```
+
+
+```{r}
+## Generate a stack-bar plot (refer to "https://www.geeksforgeeks.org/grouped-stacked-and-percent-stacked-barplot-in-ggplot2/")
+as.factor(split_count_melt$celltype)
+levels(split_count_melt$celltype)
+# Re order the levels if it is not the sequences you desire.
+#split_count_melt[,celltype:=fct_relevel(split_count_melt$celltype,"Peri","Chondro","EC","LIG","PO","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4")]
+levels(split_count_melt$celltype)
+ggplot(split_count_melt, aes(fill = orig.ident,x=celltype,y=Number))+
+geom_bar(position = "fill", stat = "identity")+
+ggtitle("Percentage of cells in each cluster")+
+  xlab("celltype")+
+  ylab("Percentage of cells")
+theme(plot.title = element_text(hjust = 0.5))
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_suture_harmony_Percentage_cell_in_each_celltype_unnormalized.pdf", height = 3, width = 7.5)
+```
+
+```{r, normalized to total number in each celltype}
+##Percent count
+
+split_count$total <-apply(split_count[,c(2:13)], 1, sum) # add `total` to the last column, 13 is the number of columns
+split_count_noname <- split_count[,-1] 
+split_count_mut <- mutate_all(split_count_noname, funs("percent" = ./split_count$total*100))
+split_count_mut_2 <- cbind(split_count[,1],split_count_mut)
+split_count_mut_3 <- split_count_mut_2[,-c(2:14,27)] # remove the number (2:14) and Total percentage (number of columns:27)
+colnames(split_count_mut_3) <- gsub("_percent", "",colnames(split_count_mut_3))
+split_count_mut_3
+write.csv(split_count_mut_3, file="./OutputTable/suture_mes_mito_MAGIC_PF_suture_harmony_cell_percentage_celltype_unmelt.csv", row.names = FALSE)
+split_count_mut_melt <- melt(split_count_mut_3,
+                         id.vars ="orig.ident",
+                         variable.name = "celltype",
+                         value.name = "Percentage")
+split_count_mut_melt
+write.csv(split_count_mut_melt, file = "./OutputTable/suture_mes_mito_MAGIC_PF_suture_harmony_cell_percentage_celltype.csv", row.names = FALSE)
+## Generate a stack-bar plot for percentage of cells
+as.factor(split_count_mut_melt$celltype)
+# Re order the levels
+#split_count_mut_melt[,celltype:=fct_relevel(split_count_mut_melt$celltype,"Peri","Chondro","EC","LIG","PO","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4")]
+ggplot(split_count_mut_melt, aes(fill = orig.ident,x=celltype,y=Percentage))+
+geom_bar(position = "fill", stat = "identity")+
+ggtitle("Percentage of cells in each celltype")+
+  xlab("celltype")+
+  ylab("Percentage of cells")
+theme(plot.title = element_text(hjust = 0.5))
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_suture_harmony_Percentage_cell_in_each_celltype_normalized.pdf", height = 3, width = 7.5)
+
+ggplot(split_count_mut_melt, aes(x = celltype, y =Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black") + theme_bw()+ theme(panel.grid = element_blank())
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_suture_harmony_Percentage_cell_in_each_celltype_normalized_stack.pdf", height = 3, width = 15)
+
+ggplot(split_count_mut_melt, aes(x = celltype, y =Percentage)) +
+  geom_col(aes(fill = orig.ident), color = "black", position = "dodge") + theme_bw()+ theme(panel.grid = element_blank())
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_suture_harmony_Percentage_cell_in_each_celltype_normalized_dodge2.pdf", height = 3, width = 15)
+
+```
+## 5.2 DPA approach
+
+```{r, source functions for DPA assay}
+source("diffprop_functions.R")
+```
+
+```{r, generate the table of cell number}
+## Read in file of counts of cells in each population across conditions
+
+obs.counts <- md[, .N, by = c("orig.ident", "celltype")] %>% dcast(., orig.ident ~ celltype, value.var = "N")
+obs.counts[is.na(obs.counts)] = 0
+obs.counts <- obs.counts %>% remove_rownames %>% column_to_rownames(var="orig.ident")
+write.csv(obs.counts, file = "./OutputTable/suture_mes_mito_MAGIC_PF_test.csv", row.names = TRUE)
+# Download and double check if the first column is the name for orig.ident.
+
+```
+
+
+```{r, DPA}
+obs.counts = as.matrix(read.csv("./OutputTable/suture_mes_mito_MAGIC_PF_test.csv", row.names = 1))
+print(obs.counts)
+## Run an example using error (p) of 0.1 and with 100,000 iterations
+tip.exp <- generateNull(obs.counts, n=100000, p=0.1);     # Generate the null distribution based on sampling
+
+obs.counts/apply(obs.counts, 1, sum)
+
+### P-value tests for DM_PF vs WT_PF
+two.class.test(obs.counts, tip.exp, cond.control="WT_PF", cond.treatment="DM_PF",to.plot=F)
+
+### P-value tests for KO_PF vs WT_PF
+two.class.test(obs.counts, tip.exp, cond.control="WT_PF", cond.treatment="KO_PF",to.plot=F)
+
+### P-value tests for Runx2_PF vs WT_PF
+two.class.test(obs.counts, tip.exp, cond.control="WT_PF", cond.treatment="Runx2_PF",to.plot=F)
+
+### P-value tests for DM_PF vs Runx2_PF
+two.class.test(obs.counts, tip.exp, cond.control="Runx2_PF", cond.treatment="DM_PF",to.plot=F)
+
+### P-value tests for KO_PF vs Runx2_PF
+two.class.test(obs.counts, tip.exp, cond.control="Runx2_PF", cond.treatment="KO_PF",to.plot=F)
+
+### P-value tests for DM_PF vs KO_PF
+two.class.test(obs.counts, tip.exp, cond.control="KO_PF", cond.treatment="DM_PF",to.plot=F)
+
+
+
+```
+
+
+```{r, Get a table of P-values for a range of p values }
+
+res.table.DM_PFvsWT_PF = c()
+res.table.KO_PFvsWT_PF = c()
+res.table.Runx2_PFvsWT_PF = c()
+res.table.DM_PFvsRunx2_PF = c()
+res.table.KO_PFvsRunx2_PF = c()
+res.table.DM_PFvsKO_PF = c()
+
+
+## Go through a series of error probabilities
+for (err_prob in c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05)) {
+  tip.exp <- generateNull(obs.counts, n=100000, p=err_prob);
+  ## DM_PF vs WT_PF
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="WT_PF", cond.treatment="DM_PF",to.plot=F)
+  res.table.DM_PFvsWT_PF = rbind(res.table.DM_PFvsWT_PF, res.1)
+  ## KO_PF vs WT_PF
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="WT_PF", cond.treatment="KO_PF",to.plot=F)
+  res.table.KO_PFvsWT_PF = rbind(res.table.KO_PFvsWT_PF, res.1)
+  ## Runx2_PF vs WT_PF
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="WT_PF", cond.treatment="Runx2_PF",to.plot=F)
+  res.table.Runx2_PFvsWT_PF = rbind(res.table.Runx2_PFvsWT_PF, res.1)
+  ## DM_PF vs Runx2_PF
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="Runx2_PF", cond.treatment="DM_PF",to.plot=F)
+  res.table.DM_PFvsRunx2_PF = rbind(res.table.DM_PFvsRunx2_PF, res.1)
+  ## KO_PF vs Runx2_PF
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="Runx2_PF", cond.treatment="KO_PF",to.plot=F)
+  res.table.KO_PFvsRunx2_PF = rbind(res.table.KO_PFvsRunx2_PF, res.1)
+  ## DM_PF vs KO_PF
+  res.1 = two.class.test(obs.counts, tip.exp, cond.control="KO_PF", cond.treatment="DM_PF",to.plot=F)
+  res.table.DM_PFvsKO_PF = rbind(res.table.DM_PFvsKO_PF, res.1)
+ 
+}
+
+rownames(res.table.DM_PFvsWT_PF) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.DM_PFvsWT_PF, file = "./OutputTable/suture_mes_mito_MAGIC_PF_suture_res.table.DM_PFvsWT_PF.csv", row.names = TRUE)
+rownames(res.table.KO_PFvsWT_PF) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.KO_PFvsWT_PF, file = "./OutputTable/suture_mes_mito_MAGIC_PF_suture_res.table.KO_PFvsWT_PF.csv", row.names = TRUE)
+rownames(res.table.Runx2_PFvsWT_PF) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.Runx2_PFvsWT_PF, file = "./OutputTable/suture_mes_mito_MAGIC_PF_suture_res.table.Runx2_PFvsWT_PF.csv", row.names = TRUE)
+rownames(res.table.DM_PFvsRunx2_PF) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.DM_PFvsRunx2_PF, file = "./OutputTable/suture_mes_mito_MAGIC_PF_suture_res.table.DM_PFvsRunx2_PF.csv", row.names = TRUE)
+rownames(res.table.KO_PFvsRunx2_PF) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.KO_PFvsRunx2_PF, file = "./OutputTable/suture_mes_mito_MAGIC_PF_suture_res.table.KO_PFvsRunx2_PF.csv", row.names = TRUE)
+rownames(res.table.DM_PFvsKO_PF) = as.character(c(0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05))
+write.csv(res.table.DM_PFvsKO_PF, file = "./OutputTable/suture_mes_mito_MAGIC_PF_suture_res.table.DM_PFvsKO_PF.csv", row.names = TRUE)
+
+```
+highlight cluster of interest: OG3
+First, we will order the color code for each celltype, then use Dimplot to color OG3
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_PF$celltype)
+colors <- c("grey","grey","grey","grey","grey",
+            "grey","grey","#619CFF","grey","grey",
+            "grey","grey")
+DimPlot(suture_mes_mito_MAGIC_PF, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG3_highlighted.pdf", device = "pdf", width = 3, height = 3)
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG3_highlighted_nolabel.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG3_highlighted_split_nolabel.png", device = "png", width = 3, height = 3)
+```
+For OG2
+highlight cluster of interest: OG2
+First, we will order the color code for each celltype, then use Dimplot to color OG2
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_PF$celltype)
+colors <- c("grey","grey","grey","grey","grey",
+            "grey","#00BA38","grey","grey","grey",
+            "grey","grey")
+DimPlot(suture_mes_mito_MAGIC_PF, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG2_highlighted.pdf", device = "pdf", width = 3, height = 3)
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG2_highlighted_nolabel.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG2_highlighted_split_nolabel.png", device = "png", width = 3, height = 3)
+```
+
+highlight cluster of interest: OG1
+First, we will order the color code for each celltype, then use Dimplot to color OG1
+```{r,fig.width=3, fig.height=3}
+levels(suture_mes_mito_MAGIC_PF$celltype)
+colors <- c("grey","grey","grey","grey","grey",
+            "#DE8C00","grey","grey","grey","grey",
+            "grey","grey")
+DimPlot(suture_mes_mito_MAGIC_PF, label = T, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG1_highlighted.pdf", device = "pdf", width = 3, height = 3)
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T)+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG1_highlighted_nolabel.pdf", device = "pdf", width = 3, height = 3)
+```
+```{r,fig.width=12, fig.height=3}
+DimPlot(suture_mes_mito_MAGIC_PF, label = F, cols = colors,repel = T, split.by = "orig.ident")+
+  NoLegend()
+ggsave("./OutputFigure/suture_mes_mito_MAGIC_PF_OG1_highlighted_split_nolabel.png", device = "png", width = 3, height = 3)
+```
+
+
+
+
+
+
+
+
+# 6 Split OG cluster
+## 6.1 Load packages and dataset
+```{r,Load packages and datasets}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito_MAGIC <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed.rds")
+
+```
+## 6.2 Split by cluster/celltype
+```{r}
+suture_mes_mito_MAGIC_OG0 <- subset(suture_mes_mito_MAGIC, idents="OG0")
+suture_mes_mito_MAGIC_OG1 <- subset(suture_mes_mito_MAGIC, idents="OG1")
+suture_mes_mito_MAGIC_OG2 <- subset(suture_mes_mito_MAGIC, idents="OG2")
+suture_mes_mito_MAGIC_OG3 <- subset(suture_mes_mito_MAGIC, idents="OG3")
+suture_mes_mito_MAGIC_OG <- subset(suture_mes_mito_MAGIC, idents=c("OG0","OG1","OG2","OG3"))
+```
+
+```{r}
+saveRDS(suture_mes_mito_MAGIC_OG0, file = "./SeuratObject/suture_mes_mito_MAGIC_OG0_seurat_20230330.rds")
+saveRDS(suture_mes_mito_MAGIC_OG1, file = "./SeuratObject/suture_mes_mito_MAGIC_OG1_seurat_20230330.rds")
+saveRDS(suture_mes_mito_MAGIC_OG2, file = "./SeuratObject/suture_mes_mito_MAGIC_OG2_seurat_20230330.rds")
+saveRDS(suture_mes_mito_MAGIC_OG3, file = "./SeuratObject/suture_mes_mito_MAGIC_OG3_seurat_20230330.rds")
+saveRDS(suture_mes_mito_MAGIC_OG, file = "./SeuratObject/suture_mes_mito_MAGIC_OG_seurat_20230330.rds")
+```
+
+
+
+## 6.3 DEGs MAGIC in OG3 in OG population
+## 6.3.1 DEGs MAGIC identication
+```{r,Load packages and datasets}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito_MAGIC_OG <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_OG_seurat_20230330.rds")
+
+```
+
+```{r}
+suture_mes_mito_MAGIC_OG_list <- SplitObject(suture_mes_mito_MAGIC_OG, split.by = "orig.ident")
+for (i in 1:length(names(suture_mes_mito_MAGIC_OG_list))) {
+  print(names(suture_mes_mito_MAGIC_OG_list)[i])
+}
+
+
+```
+
+```{r}
+
+for (i in 1:length(names(suture_mes_mito_MAGIC_OG_list))) {
+  print(paste0("Start with saving ", names(suture_mes_mito_MAGIC_OG_list)[i]))
+  saveRDS(suture_mes_mito_MAGIC_OG_list[1], file = paste0("./SeuratObject/suture_mes_mito_MAGIC_OG_",names(suture_mes_mito_MAGIC_OG_list)[i],"_seurat_20230330.rds" ))
+  print(paste0("Done with saving", paste0("./SeuratObject/suture_mes_mito_MAGIC_OG_",names(suture_mes_mito_MAGIC_OG_list)[i],"_seurat_20230330.rds" )))
+}
+
+
+
+
+```
+
+
+
+
+```{r}
+suture_mes_mito_MAGIC_OG$celltype.group <- paste(suture_mes_mito_MAGIC_OG$celltype, suture_mes_mito_MAGIC_OG$orig.ident, sep = "_")
+suture_mes_mito_MAGIC_OG$celltype <- Idents(suture_mes_mito_MAGIC_OG)
+Idents(suture_mes_mito_MAGIC_OG) <- "celltype.group"
+table(suture_mes_mito_MAGIC_OG$celltype.group)
+```
+
+```{r}
+cellfordeg<-as.factor(rownames(table(suture_mes_mito_MAGIC_OG$orig.ident)))
+cellfordeg
+```
+
+Generate and harvest the top20 changed genes among different gennotypes. Based on imputated MAGIC_SCT
+```{r}
+DefaultAssay(suture_mes_mito_MAGIC_OG) <- "MAGIC_SCT"
+n <- length(cellfordeg)  # get the length of the list
+for (i in 1:(n-1)) {  # iterate through all pairs of elements
+  for (j in (i+1):n) {
+  CELLDEG_OG3 <- FindMarkers(suture_mes_mito_MAGIC_OG, ident.1 = paste0("OG3_", cellfordeg[[i]]), ident.2 = paste0("OG3_",cellfordeg[[j]]), verbose = FALSE)
+    top10 <- CELLDEG_OG3 %>% top_n(n = 20, wt = avg_log2FC) # You may change n=20 to other number to get top_n genes as you wish.
+  write.csv(top10,paste0("OG3_", cellfordeg[i],"_", cellfordeg[[j]] ,"_MAGIC_top20.CSV"))
+  }
+}
+
+```
+
+Gather all DEs for OG3
+```{r}
+# list all the CSV files in the directory
+files <- list.files(pattern = "*_MAGIC_top20.CSV")
+# create an empty list to store the dataframes
+unique_vals <- list()
+# loop through each file and read it into a dataframe and add it to the list
+for (file in files) {
+  df <- read.csv(file, stringsAsFactors = FALSE)
+  unique_vals[[file]] <- unique(df[,1])
+}
+
+
+# combine all the unique values into one vector and remove duplicates
+unique_first_col <- unique(unlist(unique_vals))
+```
+
+```{r}
+OG3_DE_MAGIC <- as.factor(unique_first_col)
+```
+
+
+## 6.3.2 Seurat for DEs in OG3
+Here we subset the OG3 object using all the DEs in OG3.
+
+```{r}
+
+suture_mes_mito_MAGIC_OG3_DE <- subset(suture_mes_mito_MAGIC_OG, features = OG3_DE_MAGIC)
+Idents(suture_mes_mito_MAGIC_OG3_DE) <- "celltype"
+suture_mes_mito_MAGIC_OG3_DE <- subset(suture_mes_mito_MAGIC_OG3_DE, idents = "OG3")
+```
+
+Here, we extracted the expression matrix based on MAGIC imputation
+```{r}
+suture_mes_mito_MAGIC_OG3_DE_matrix <- suture_mes_mito_MAGIC_OG3_DE@assays$MAGIC_SCT@data
+```
+
+Remove the barcode information
+```{r}
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("WT_SAG.*", "WT_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("KO_SAG.*", "KO_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix)<- gsub("Runx2_SAG.*", "Runx2_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("DM_SAG.*", "DM_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("WT_PF.*", "WT_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("KO_PF.*", "KO_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix)<- gsub("Runx2_PF.*", "Runx2_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("DM_PF.*", "DM_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+```
+
+Generate matrix
+
+```{r}
+df <- (as.matrix(suture_mes_mito_MAGIC_OG3_DE_matrix))
+df[1:3, 1:5]
+```
+Here, we want to check the number and sequence of the 8 genotype_tissue
+```{r}
+
+# Convert the first row of the matrix into a factor variable
+factors <- factor(colnames(df), levels = unique(colnames(df)))
+
+
+# Get the unique factor sequences and their frequencies
+unique_seqs <- table(factors)
+
+# Print the unique factor sequences and their frequencies
+cat("Unique factor sequences:\n")
+for (i in seq_along(unique_seqs)) {
+  cat("\t", names(unique_seqs)[i], ": ", unique_seqs[i], "\n")
+}
+
+   #WT_PF :  250 
+   #WT_SAG :  361 
+   #Runx2_PF :  279 
+   #Runx2_SAG :  60 
+   #KO_PF :  190 
+   #KO_SAG :  557 
+   #DM_PF :  127 
+   #DM_SAG :  267 
+```
+But from 5.4, we found such sequence of display is not very acceptable. And we want to reorder them as ("WT_PF", "Runx2_PF", "KO_PF", "DM_PF", "WT_SAG", "Runx2_SAG", "KO_SAG","DM_SAG")
+```{r}
+dim(df)
+# Define the new order of column names
+new_order <- c(rep("WT_PF", 250), rep("Runx2_PF", 279), rep("KO_PF", 190), rep("DM_PF", 127),
+               rep("WT_SAG", 361), rep("Runx2_SAG", 60), rep("KO_SAG", 557), rep("DM_SAG", 267))
+
+
+# Reorder the columns of the matrix
+df_reordered <- df[, order(match(colnames(df), new_order))]
+
+dim(df_reordered)
+```
+
+```{r}
+df_reordered[1:3, 1:5]
+# Since these column are with same colname, we want to make them unique.
+colnames(df_reordered) <- c(paste0("WT_PF_", 1:250), paste0("Runx2_PF_", 1:279), paste0("KO_PF_", 1:190), paste0("DM_PF_", 1:127), paste0("WT_SAG_", 1:361), paste0("Runx2_SAG_", 1:60), paste0("KO_SAG_", 1:557), paste0("DM_SAG_", 1:267))
+  
+  
+```
+
+Generate an annotation dataframe to annotate each column
+```{r}
+annotation_col = data.frame(
+  group = c(rep("WT_PF", 250), rep("Runx2_PF", 279), rep("KO_PF", 190), rep("DM_PF", 127),
+               rep("WT_SAG", 361), rep("Runx2_SAG", 60), rep("KO_SAG", 557), rep("DM_SAG", 267))
+
+)
+row.names(annotation_col) <- colnames(df_reordered)
+```
+Generate an annotation dataframe for color
+```{r}
+groupcolor <- c("#FF5733","#FFC300","#FF4081","#7B1FA2",
+                '#4CAF50','#2196F3','#795548','#2C427E') 
+names(groupcolor) <- c("WT_PF","Runx2_PF","KO_PF","DM_PF",
+                       "WT_SAG","Runx2_SAG","KO_SAG","DM_SAG") # group id
+
+ann_colors <- list(group=groupcolor) #You may add more catergories according to your designn
+```
+
+
+```{r}
+dim(df_reordered)
+ph_cluster_test <- function(x,j){
+  n=t(scale(t(x)))
+  head(n)
+  n[n>4]=4 #Set upper limit, values greater than 4 equal to 4
+  n[n< -4]= -4 #Set lower limit, values less than -4 equal to -4
+  head(n)
+  n[1:4,1:4]
+  m<- paste(x,"_ph",sep = "_")
+  m<-pheatmap(n,cluster_rows = T,cluster_cols = F,
+         color=colorRampPalette(c("navy","white","firebrick3"))(100),
+         show_colnames = F,border_color = NA,show_rownames =T,
+         annotation_col = annotation_col,
+         annotation_colors = ann_colors,
+         cutree_row = j, cutree_cols = 5)
+  m
+  return(m)
+}
+
+```
+
+
+```{r,fig.height=20, fig.width=10}
+library(pheatmap)
+
+tdf_test<-ph_cluster_test(df_reordered,12)
+
+```
+## 6.4 DEGs RNA in OG3 in OG population
+## 6.4.1 DEGs RNA identication
+```{r,Load packages and datasets}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito_MAGIC_OG <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_OG_seurat_20230330.rds")
+
+```
+
+```{r}
+suture_mes_mito_MAGIC_OG$celltype.group <- paste(suture_mes_mito_MAGIC_OG$celltype, suture_mes_mito_MAGIC_OG$orig.ident, sep = "_")
+suture_mes_mito_MAGIC_OG$celltype <- Idents(suture_mes_mito_MAGIC_OG)
+Idents(suture_mes_mito_MAGIC_OG) <- "celltype.group"
+table(suture_mes_mito_MAGIC_OG$celltype.group)
+```
+
+```{r}
+cellfordeg<-as.factor(rownames(table(suture_mes_mito_MAGIC_OG$orig.ident)))
+cellfordeg
+```
+
+Generate and harvest the top20 changed genes among different gennotypes. Based on RNA data
+```{r}
+DefaultAssay(suture_mes_mito_MAGIC_OG) <- "RNA"
+n <- length(cellfordeg)  # get the length of the list
+for (i in 1:(n-1)) {  # iterate through all pairs of elements
+  for (j in (i+1):n) {
+  CELLDEG_OG3 <- FindMarkers(suture_mes_mito_MAGIC_OG, ident.1 = paste0("OG3_", cellfordeg[[i]]), ident.2 = paste0("OG3_",cellfordeg[[j]]), verbose = FALSE)
+    top10 <- CELLDEG_OG3 %>% top_n(n = 20, wt = avg_log2FC) # You may change n=20 to other number to get top_n genes as you wish.
+  write.csv(top10,paste0("OG3_", cellfordeg[i],"_", cellfordeg[[j]] ,"_RNA_top20.CSV"))
+  }
+}
+
+```
+
+Gather all DEs for OG3
+```{r}
+# list all the CSV files in the directory
+files <- list.files(pattern = "*_RNA_top20.CSV")
+# create an empty list to store the dataframes
+unique_vals <- list()
+# loop through each file and read it into a dataframe and add it to the list
+for (file in files) {
+  df <- read.csv(file, stringsAsFactors = FALSE)
+  unique_vals[[file]] <- unique(df[,1])
+}
+
+
+# combine all the unique values into one vector and remove duplicates
+unique_first_col <- unique(unlist(unique_vals))
+```
+
+```{r}
+OG3_DE_RNA <- as.factor(unique_first_col)
+```
+
+
+## 6.4.2 Seurat for DEs in OG3
+Here we subset the OG3 object using all the DEs in OG3.
+
+```{r}
+
+suture_mes_mito_MAGIC_OG3_DE <- subset(suture_mes_mito_MAGIC_OG, features = OG3_DE_RNA)
+Idents(suture_mes_mito_MAGIC_OG3_DE) <- "celltype"
+suture_mes_mito_MAGIC_OG3_DE <- subset(suture_mes_mito_MAGIC_OG3_DE, idents = "OG3")
+```
+
+Here, we extracted the expression matrix based on MAGIC imputation
+```{r}
+suture_mes_mito_MAGIC_OG3_DE_matrix <- suture_mes_mito_MAGIC_OG3_DE@assays$MAGIC_SCT@data
+```
+
+Remove the barcode information
+```{r}
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("WT_SAG.*", "WT_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("KO_SAG.*", "KO_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix)<- gsub("Runx2_SAG.*", "Runx2_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("DM_SAG.*", "DM_SAG",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("WT_PF.*", "WT_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("KO_PF.*", "KO_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix)<- gsub("Runx2_PF.*", "Runx2_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+colnames(suture_mes_mito_MAGIC_OG3_DE_matrix) <- gsub("DM_PF.*", "DM_PF",colnames(suture_mes_mito_MAGIC_OG3_DE_matrix))
+```
+
+Generate matrix
+
+```{r}
+df <- (as.matrix(suture_mes_mito_MAGIC_OG3_DE_matrix))
+df[1:3, 1:5]
+```
+Here, we want to check the number and sequence of the 8 genotype_tissue
+```{r}
+
+# Convert the first row of the matrix into a factor variable
+factors <- factor(colnames(df), levels = unique(colnames(df)))
+
+
+# Get the unique factor sequences and their frequencies
+unique_seqs <- table(factors)
+
+# Print the unique factor sequences and their frequencies
+cat("Unique factor sequences:\n")
+for (i in seq_along(unique_seqs)) {
+  cat("\t", names(unique_seqs)[i], ": ", unique_seqs[i], "\n")
+}
+
+   #WT_PF :  250 
+   #WT_SAG :  361 
+   #Runx2_PF :  279 
+   #Runx2_SAG :  60 
+   #KO_PF :  190 
+   #KO_SAG :  557 
+   #DM_PF :  127 
+   #DM_SAG :  267 
+```
+But from 5.4, we found such sequence of display is not very acceptable. And we want to reorder them as ("WT_PF", "Runx2_PF", "KO_PF", "DM_PF", "WT_SAG", "Runx2_SAG", "KO_SAG","DM_SAG")
+```{r}
+dim(df)
+# Define the new order of column names
+new_order <- c(rep("WT_PF", 250), rep("Runx2_PF", 279), rep("KO_PF", 190), rep("DM_PF", 127),
+               rep("WT_SAG", 361), rep("Runx2_SAG", 60), rep("KO_SAG", 557), rep("DM_SAG", 267))
+
+
+# Reorder the columns of the matrix
+df_reordered <- df[, order(match(colnames(df), new_order))]
+
+dim(df_reordered)
+```
+
+```{r}
+df_reordered[1:3, 1:5]
+# Since these column are with same colname, we want to make them unique.
+colnames(df_reordered) <- c(paste0("WT_PF_", 1:250), paste0("Runx2_PF_", 1:279), paste0("KO_PF_", 1:190), paste0("DM_PF_", 1:127), paste0("WT_SAG_", 1:361), paste0("Runx2_SAG_", 1:60), paste0("KO_SAG_", 1:557), paste0("DM_SAG_", 1:267))
+  
+  
+```
+
+Generate an annotation dataframe to annotate each column
+```{r}
+annotation_col = data.frame(
+  group = c(rep("WT_PF", 250), rep("Runx2_PF", 279), rep("KO_PF", 190), rep("DM_PF", 127),
+               rep("WT_SAG", 361), rep("Runx2_SAG", 60), rep("KO_SAG", 557), rep("DM_SAG", 267))
+
+)
+row.names(annotation_col) <- colnames(df_reordered)
+```
+Generate an annotation dataframe for color
+```{r}
+groupcolor <- c("#FF5733","#FFC300","#FF4081","#7B1FA2",
+                '#4CAF50','#2196F3','#795548','#2C427E') 
+names(groupcolor) <- c("WT_PF","Runx2_PF","KO_PF","DM_PF",
+                       "WT_SAG","Runx2_SAG","KO_SAG","DM_SAG") # group id
+
+ann_colors <- list(group=groupcolor) #You may add more catergories according to your designn
+```
+
+
+```{r}
+dim(df_reordered)
+ph_cluster_test <- function(x,j){
+  n=t(scale(t(x)))
+  head(n)
+  n[n>4]=4 #Set upper limit, values greater than 4 equal to 4
+  n[n< -4]= -4 #Set lower limit, values less than -4 equal to -4
+  head(n)
+  n[1:4,1:4]
+  m<- paste(x,"_ph",sep = "_")
+  m<-pheatmap(n,cluster_rows = T,cluster_cols = F,
+         color=colorRampPalette(c("navy","white","firebrick3"))(100),
+         show_colnames = F,border_color = NA,show_rownames =T,
+         annotation_col = annotation_col,
+         annotation_colors = ann_colors,
+         cutree_row = j, cutree_cols = 5)
+  m
+  return(m)
+}
+
+```
+
+
+```{r,fig.height=25, fig.width=10}
+library(pheatmap)
+
+tdf_test<-ph_cluster_test(df_reordered,12)
+
+```
+
+
+
+
+## 6.5 Feature Plot for DEs in OG3
+```{r}
+suture_mes_mito_MAGIC <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_harmony_renamed.rds")
+```
+
+### 6.5.1 MAGIC_SCT
+```{r}
+DefaultAssay(suture_mes_mito_MAGIC) <- "MAGIC_SCT"
+```
+
+
+```{r, ibsp,fig.height=3, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Ibsp"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+             pt.size = 0.1,
+            label=T, repel=T)
+```
+```{r, Igfbp5,fig.height=3, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Igfbp5"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+             pt.size = 0.1,
+            label=T, repel=T)
+```
+```{r, Igfbp5,fig.height=9, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("mt-Co1","mt-Atp6","mt-Nd4"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+             pt.size = 0.1,
+            label=T, repel=T)
+```
+```{r, Igfbp5,fig.height=9, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Sqstm1","Nsd3","Atf4"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+             pt.size = 0.1,
+            label=T, repel=T)
+```
+
+```{r, ibsp,fig.height=3, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Tomm20"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+             pt.size = 0.1,
+            label=T, repel=T)
+```
+
+### 6.5.2 RNA
+```{r}
+DefaultAssay(suture_mes_mito_MAGIC) <- "RNA"
+```
+
+
+```{r, ibsp,fig.height=3, fig.width=20}
+
+FeaturePlot(suture_mes_mito_MAGIC, features = c("Ibsp"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            split.by = "orig.ident",
+             pt.size = 0.1,
+            label=T, repel=T)
+```
+
+
+## 6.6 scVelo attributes for OG with different orig.ident
+
+```{r,Load packages and datasets}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito_MAGIC_OG <- readRDS(file = "./SeuratObject/suture_mes_mito_MAGIC_OG_seurat_20230330.rds")
+
+```
+
+```{r}
+suture_mes_mito_MAGIC_OG_list <- SplitObject(suture_mes_mito_MAGIC_OG, split.by = "orig.ident")
+for (i in 1:length(names(suture_mes_mito_MAGIC_OG_list))) {
+  print(names(suture_mes_mito_MAGIC_OG_list)[i])
+}
+
+
+```
+
+```{r}
+rm(suture_mes_mito_MAGIC_OG)
+gc()
+```
+
+
+
+
+```{r}
+
+for (i in 1:length(names(suture_mes_mito_MAGIC_OG_list))) {
+  print(paste0("Start with scVelo attributes for ", names(suture_mes_mito_MAGIC_OG_list)[i]))
+  full_sample <- suture_mes_mito_MAGIC_OG_list[[names(suture_mes_mito_MAGIC_OG_list)[i]]]
+  # Export filtered cell ID
+  cellID <- as.data.frame(Cells(full_sample))
+  head(cellID)# I don't know why in a for-loop, I cannot get output of this script or [,] display
+  write.csv(cellID, file = paste0("./scVeloInput/suture_mes_mito_MAGIC_OG_",names(suture_mes_mito_MAGIC_OG_list)[i],"_cellID_obs.csv"),row.names = FALSE)
+  # Export umap coordinates
+  umapID <- Embeddings(full_sample, reduction = "umap")
+  umapID[1:3,1:2]
+  write.csv(umapID, file = paste0("./scVeloInput/suture_mes_mito_MAGIC_OG_",names(suture_mes_mito_MAGIC_OG_list)[i],"_cell_embeddings.csv"),row.names = TRUE)
+  # Export cluster information
+  ## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+  head(full_sample@meta.data$celltype) #
+  cluster_head <-full_sample@meta.data$celltype # Optional
+  cluster_head <- as.data.frame(cluster_head)
+  cluster_info <- cbind(cellID$`Cells(full_sample)`, cluster_head)
+  colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+  write.csv(cluster_info, file = paste0("./scVeloInput/suture_mes_mito_MAGIC_OG_",names(suture_mes_mito_MAGIC_OG_list)[i],"_clusters.csv"),row.names = FALSE)
+  
+  print(paste0("Done with scVelo attributes for ", names(suture_mes_mito_MAGIC_OG_list)[i]))
+  rm(full_sample)
+}
+
+```
+
+
+Check the file names, below we want to check if we get the desired number of files we need.
+```{r}
+file_names <- list.files(path="./scVeloInput/",
+                         pattern = "suture_mes_mito_MAGIC_OG_*",
+                         full.names=FALSE)
+file_names
+
+print(length(file_names) == length(suture_mes_mito_MAGIC_OG_list)*3)
+
+
+```
+
+
+```{r, prepare parameter matrix of combined DM_SAG for scvelo}
+# Export filtered cell ID
+suture_mes_mito_MAGIC_DM_SAG_cells <- as.data.frame(Cells(suture_mes_mito_MAGIC_DM_SAG))
+head(suture_mes_mito_MAGIC_DM_SAG_cells)
+write.csv(suture_mes_mito_MAGIC_DM_SAG_cells, file = "./scVeloInput/suture_mes_mito_MAGIC_DM_SAG_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_MAGIC_DM_SAG <- Embeddings(suture_mes_mito_MAGIC_DM_SAG, reduction = "umap")
+head(suture_mes_mito_MAGIC_DM_SAG)
+umap_suture_mes_mito_MAGIC_DM_SAG[1:3,1:2]
+write.csv(umap_suture_mes_mito_MAGIC_DM_SAG, file = "./scVeloInput/suture_mes_mito_MAGIC_DM_SAG_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_MAGIC_DM_SAG@meta.data$celltype) #
+cluster_head <-suture_mes_mito_MAGIC_DM_SAG@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_MAGIC_DM_SAG_cells$`Cells(suture_mes_mito_MAGIC_DM_SAG)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_MAGIC_DM_SAG_clusters.csv",row.names = FALSE)
+rm(suture_mes_mito_MAGIC_DM_SAG)
+```
+
+
+

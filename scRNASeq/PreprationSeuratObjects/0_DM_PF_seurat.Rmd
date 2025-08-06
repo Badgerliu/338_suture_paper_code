@@ -1,0 +1,264 @@
+---
+title: "P9 DoubleMutant Mouse PF suture scRNA "
+author: "Huan"
+date: "11/17/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE
+)
+```
+
+This note was used for single cell RNA-seq analysis of `P9 DoubleMutant Mouse PF suture`. # summary for the goal of this current research 
+Sample ID: `DM_PF`  #Name for the folder containing 10x output Before start the following analysis, you need to create a folder with 10xoutput folder and a related Rproject.
+
+# 1 Setup of analysis environment
+
+## 1.1 Package installation
+
+Seurat (v3), ggplot2 and sctransform packages were installed. Here we use sctransform for scRNAseq normalization, but you can also use the routine approach.
+
+## 1.2 Load environment and packages
+
+```{r load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(FlexDotPlot)
+library(tidyverse)
+set.seed(12)
+theme_set(theme_bw())
+
+```
+
+# 1.3 Load data and create Seurat object
+
+```{r, load 10X datasets}
+DM_PF_data <- Read10X(data.dir = "./DM_PF/") # you will change the prefix, ie., DM_PF_ before data."DM_PF" is the folder containing 10xOutput.
+
+
+```
+
+```{r, create Seurat object}
+DM_PF <- CreateSeuratObject(counts =DM_PF_data, project = "DM_PF", min.cells = 3, min.features = 200)
+DM_PF #Check the strucuture of seurat object #21262 features across 11802 samples within 1 assay    
+saveRDS(DM_PF, file="./SeuratObject/DM_PF_raw.rds") #save the raw Seurat object with related prefix.
+```
+
+# 2 Initial analysis
+
+## 2.1 Initial analysis was performed using SCTransform
+
+First, QC for all cells counted by Cell Ranger
+
+```{r, initial QC}
+
+# store mitochondrial percentage in object meta data
+DM_PF <- PercentageFeatureSet(DM_PF, pattern = "^mt-", col.name = "percent.mt") # If you are working with Human sample, change ^mt to ^MT.
+
+# Show QC metrics for the first 5 cells
+
+head(DM_PF@meta.data, 5)
+
+# Visualize QC metrics as a violin plot
+VlnPlot(DM_PF, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+# Scatter plot for correlation between count and Mt RNA
+## Correlation between nCount_RNA and percent.mt
+plot1 <- FeatureScatter(DM_PF, feature1 = "nCount_RNA", feature2 = "percent.mt")
+# Correlation between nCount_RNA and nFeature_RNA
+plot2 <- FeatureScatter(DM_PF, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2 #combine both
+
+DM_PF #21579 features across 12331 samples within 1 assay   
+```
+
+Second, filter "strange" cells depending on the nFeature_RNA and mt
+
+```{r, filter cells and QC}
+# Filter cells
+DM_PF <- subset(DM_PF, subset = nFeature_RNA > 1000 & 
+               nFeature_RNA < 7500  &
+               percent.mt < 10)
+# You may adjust the above parameters according to the plots above. Here we want to remove cells with nFeature_RNA>1000 and less than 7500, mt%<10
+
+# Scatter plot for correlation between count and Mt RNA
+## Correlation between nCount_RNA and percent.mt
+plot1 <- FeatureScatter(DM_PF, feature1 = "nCount_RNA", feature2 = "percent.mt")
+# Correlation between nCount_RNA and nFeature_RNA
+plot2 <- FeatureScatter(DM_PF, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2 #combine both, correlation between nRNA and nFeature should be more than 0.9
+
+VlnPlot(DM_PF, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+DM_PF #21579 features across 10264 samples within 1 assay  
+```
+
+Third, one-step-regression using SCTransform Refer to <https://satijalab.org/seurat/articles/sctransform_vignette.html> to check the vignette of SCTransform.
+
+    Note that this single command replaces NormalizeData(), ScaleData(), and FindVariableFeatures().
+    Transformed data will be available in the SCT assay, which is set as the default after running sctransform
+    During normalization, we can also remove confounding sources of variation, for example, mitochondrial mapping percentage
+
+```{r, SCTransform}
+# run sctransform regress to the precentage of mitochondria
+DM_PF <- SCTransform(DM_PF, vars.to.regress = "percent.mt", verbose = FALSE)
+```
+
+## 2.2 Clustering and dimension reduction
+
+PCA assay
+
+```{r, PCA}
+DM_PF <- RunPCA(DM_PF, features = VariableFeatures(object = DM_PF))
+
+```
+
+Using a vector-based prediction, we chose the best parameter dims=1:30
+
+```{r, reclustering,fig.height=8, fig.width=9}
+# Find a suitable dim for clustering
+
+c(2,seq(from=3,by=3,length=10) )
+map(c(2,seq(from=3,by=3,length=10) ) , function(x) { DM_PF %>%  RunUMAP(n.neighbors = 50,n.epochs=105,dims = 1:x) %>% DimPlot()}) %>% cowplot::plot_grid(plotlist = .) # dims= 1:30 works best depending on the "distance"
+
+```
+
+Other two more statistical approach can be used
+
+```{r, determin dimsion}
+#JackStraw but not applicable to SCTransform-normalized data
+#DM_PF <- JackStraw(DM_PF, num.replicate = 100)
+#DM_PF <- ScoreJackStraw(DM_PF, dims = 1:30)
+#JackStrawPlot(DM_PF, dims = 1:15)
+#ElboPlot
+ElbowPlot(DM_PF, ndims=50) # actually no 'obvious' elbow point revealed on the graph, so we go ahead with 1:30 dim
+```
+
+We then perform clustering using UMAP using dim=1:30
+
+```{r cluster and dimension-reduction, fig.width=5, fig.height=7}
+# These are now standard steps in the Seurat workflow for visualization and clustering
+
+DM_PF <- RunUMAP(DM_PF, dims = 1:30, verbose = FALSE)
+
+DM_PF <- FindNeighbors(DM_PF, dims = 1:30, verbose = FALSE)
+DM_PF <- FindClusters(DM_PF, verbose = FALSE)
+DimPlot(DM_PF, label = TRUE)
+
+
+```
+
+```{r, test umap}
+DimPlot(DM_PF, label = TRUE, pt.size = 0.5)
+ggsave("./OutputFigure/DM_PF_umap.pdf", device = "pdf", width =25 , height =22, units = "cm")
+```
+## 2.2 Output Seurat Object 
+```{r, save output}
+saveRDS(DM_PF,file = "./SeuratObject/DM_PF_Seurat.rds")
+```
+
+# 3 Marker genes and subset object
+
+## 3.0 Load saved data and perform basic plot
+
+```{r, load data}
+DM_PF <- readRDS("./SeuratObject/DM_PF_Seurat.rds")
+
+```
+
+```{r,umap plot test}
+DimPlot(DM_PF, label = TRUE, pt.size = 0.5)
+
+```
+
+## 3.1 Find marker genes for each cluster
+
+```{r, generally find marker genes}
+DM_PF_markers <- FindAllMarkers(object = DM_PF, only.pos = TRUE, 
+                               min.pct = 0.25, thresh.use = 0.25) #identify positive marker genes 
+top10 <- DM_PF_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+
+write.csv(DM_PF_markers, file = "DM_PF_markers_20221117.csv", row.names = FALSE) #adjust name accordingly
+write.csv(top10, file = "DM_PF_markers_top10_20221117.csv", row.names = FALSE) #adjust name accordingly
+```
+
+```{r, heatmapplot, fig.width=10, fig.height=18 }
+DoHeatmap(DM_PF, features = top10$gene)
+ggsave("./OutputFigure/DM_PF_markers_top10_20221117.pdf", device = "pdf",#adjust filename accordingly
+       width = 30, #adjust according to the display of output
+       height = 55, #adjust according to the display of output
+       units = "cm")
+
+```
+
+## 3.2 Dot plot for different genes of interest
+```{r, setup gene list}
+#markers refer to https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7359078/
+genes_to_check <- c("Col1a1", "Lum","Nfia", #Dermal
+					"Runx2", "Sp7", "Gli1","Fgfr2","Igf2", #Osteogenic
+                     "Epcam","Lhx2", #Epithelium
+                             "Plp1","Fabp7", #Melanocyte
+                             "Rgs5","Acta2", #Pericyte
+                             "Pecam1","Kdr", #Endothelial
+                             "Cd52","Fcer1g","Cd86","Cd163", #immune
+                             "Map2","Stmn3" #Neural
+                             )
+```
+
+
+```{r, dot plot to show the distribution of marker genes in each seurat cluster}
+DotPlot(DM_PF, features = unique(genes_to_check),group.by = "seurat_clusters")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+#NA represent genes without detection, you need to adjust the name for genes of interest above
+```
+```{r, another version of dotplot for marker genes}
+Idents(DM_PF) <- DM_PF$seurat_clusters
+DotPlot(DM_PF, features=unique(genes_to_check))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./OutputFigure/DM_PF_dotplot_marker_genes_unordered.pdf", width = 20, height =15,units = "cm")
+```
+
+```{r, cluster version of dotplot for marker genes, fig.width= 10, fig.height=12}
+
+dp = DotPlot(DM_PF, features = unique(genes_to_check)) + RotatedAxis()
+dot_plot(dp$data[,c(3,4,1,2,5)],
+         size_var = 'pct.exp',
+         col_var = 'avg.exp.scaled',
+         size_legend = 'Percent Expressed',
+         col_legend = 'Average Expression',
+         x.lab.pos = 'bottom',
+         y.lab.pos = 'right',
+         display_max_sizes = F,
+         shape.scale = 8,
+         hclust_method = 'ward.D2',
+         dend_x_var = c('pct.exp','avg.exp.scaled'),
+         dend_y_var = c('pct.exp','avg.exp.scaled'),
+         text.size = 0.5,
+         text.vjust = 0.5,
+         size.breaks.number = 6,
+         color.breaks.number = 4,
+         x.lab.size.factor = 0.8,
+         cols.use = c('#330066','#336699','#66CC66','#FFCC33'),
+         y.lab.size.factor = 1)
+#ggsave("./OutputFigure/DM_PF_dotplot_marker_genes.png", width = 30, height =40) # this is not working, you may right click the figure and save as another png file.
+```
+
+## 3.3 FeaturePlot for genes of interest
+```{r,featureplot for genes of interest,fig.width=5, fig.height=9}
+FeaturePlot(DM_PF, features = c("Igf2","Gli1","Runx2","Fgfr2","Fgfr3",
+                                "Mki67",
+                                "Cdh1","Krt5",
+                                "Sp7", "Postn"), ncol=2, pt.size = 0.1)
+ggsave("./OutputFigure/DM_PF_featurePlot_interest_markers.pdf", device = "pdf", width = 20, height =30, units = "cm")
+```

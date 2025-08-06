@@ -1,0 +1,1122 @@
+---
+title: "P9  Mouse suture scRNA -- mes regress to mto"
+author: "Huan"
+date: "8/22/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  tidy = TRUE,
+  tidy.opts = list(width.cutoff = 120),
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE
+)
+```
+
+This note was used for integrative single cell RNA-seq analysis of `P9 wildtype mouse suture`.
+Here we focused on mesenchymal cells from the single cell object.
+For harmony-based integration, vars.to.regress = "percent.mt" is used to regress out (remove) the influence of mitochondrial gene expression before performing batch correction.
+Input using "suture_mes_raw_20230328.rds" , while the resulted "suture_mes_mito_harmony_20230329.rds" object is then subjected to MAGIC step.
+
+
+
+# 1 Setup of analysis environment
+## 1.1 Package installation 
+Seurat (v3), harmony,ggplot2,magrittr and sctransform packages were installed.
+
+## 1.2 Load environment and packages
+```{r load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+library(CellChat)
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito <- readRDS(file = "./SeuratObject/suture_mes_raw_20230328.rds")
+
+
+```
+
+## 1.3 Review saved Seurat objects
+```{r, review save object}
+DimPlot(suture_mes_mito, reduction = "umap", label = T)
+DimPlot(suture_mes_mito, reduction = "umap", group.by = "orig.ident")
+DimPlot(suture_mes_mito, reduction = "umap", split.by  = "orig.ident")
+
+```
+We reperform the dimension reduction and clustering
+
+## 1.4 Rerun harmony with regression to mito
+
+```{r, scale, normalzation and integration}
+suture_mes_mito.list <- SplitObject(object = suture_mes_mito, split.by = "orig.ident")
+for (i in 1:length(suture_mes_mito.list)) {
+    suture_mes_mito.list[[i]] <- SCTransform(suture_mes_mito.list[[i]], vars.to.regress = "percent.mt", verbose = FALSE)
+} #I'm not sure if the split and merge is necessary, but it won't cause trouble
+```
+
+
+Following the discussion in `https://github.com/immunogenomics/harmony/issues/41`
+```{r, select integration feature for the merged dataset}
+suture_mes_mito.features <- SelectIntegrationFeatures(object.list = suture_mes_mito.list, nfeatures = 3000)
+suture_mes_mito <- merge(suture_mes_mito.list[[1]],
+                   y = suture_mes_mito.list[2:length(suture_mes_mito.list)],  
+                   project = "suture_mes_mito", 
+                   merge.data = TRUE)
+VariableFeatures(suture_mes_mito) <- suture_mes_mito.features
+```
+
+
+PCA using SCT features
+```{r,PCA using SCT features}
+suture_mes_mito <- RunPCA(object = suture_mes_mito, assay = "SCT", npcs = 50)
+```
+
+```{r, integration and batch effect removal using hamony}
+system.time({
+    suture_mes_mito <- RunHarmony(object = suture_mes_mito, 
+                            assay.use = "SCT",
+                            reduction = "pca",
+                            dims.use = 1:50,
+                            group.by.vars = "orig.ident",
+                            plot_convergence = TRUE)
+})
+```
+
+
+## 1.5 Probing resolution
+*You may probe dims and resolution in details*
+```{r, dimension reduction}
+suture_mes_mito <- RunUMAP(object = suture_mes_mito, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+Filter(f = function(x) inherits(suture_mes_mito[[x]], "Graph"), names(suture_mes_mito))
+suture_mes_mito <- FindNeighbors(object = suture_mes_mito, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+```
+```{r}
+Filter(f = function(x) inherits(suture_mes_mito[[x]], "Graph"), names(suture_mes_mito))
+```
+
+
+*For details of probing resolution, refer to `https://cloud.tencent.com/developer/article/1825681`. *
+Here we will set an intermediate seurat object innheriting all the metadata from the formal object.
+```{r, probing resolution parameter}
+
+suture_mes_mito.resolution <- FindClusters(suture_mes_mito, dims=1:50,resolution = seq(from=0,by=.2,length=10))
+
+```
+
+```{r, fig.height=10, fig.width=10}
+clustree(suture_mes_mito.resolution)
+```
+*Choosing resolution is quite arbitrary and no conclusion has been attained before biological validation*
+The `suture.resolution` object has many choice for resultion, such as SCT_snn_res.0.8. You may want to plot and check. Here are some examples:
+```{r, probeing resolution}
+DimPlot(suture_mes_mito.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.2")
+DimPlot(suture_mes_mito.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.4")
+DimPlot(suture_mes_mito.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.6")
+DimPlot(suture_mes_mito.resolution, reduction = "umap", label = T, group.by = "SCT_snn_res.0.8")
+
+```
+
+
+
+
+Here we choose res = 0.4
+
+
+```{r, cluster with a suitable resolution}
+suture_mes_mito <- FindClusters(object = suture_mes_mito, resolution = 0.4) #You may probe resolution in details
+```
+
+```{r, test plot,fig.height=5, fig.width=8}
+plots <- DimPlot(suture_mes_mito, group.by = c("orig.ident", "seurat_clusters"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+## 1.6 Initial plots 
+After the clustering, we are eager to see the topological relationship between different clusters.
+```{r, initial plots}
+#group_by_cluster
+plot1 = DimPlot(suture_mes_mito, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(suture_mes_mito, reduction = "umap", group.by = "orig.ident")
+plot3 = DimPlot(suture_mes_mito, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+ggsave("./OutputFigure/suture_mes_mito_umap.png", plot = plotc, width = 10, height = 5)
+plot3
+ggsave("./OutputFigure/suture_mes_mito_umap_split.png", plot = plot3, width = 20, height = 5) # You may set the parameters, especially the "width". Usually each plot will take about 5.5 unit.
+
+DimPlot(suture_mes_mito, reduction = "umap", label = T)
+DimPlot(suture_mes_mito, reduction = "umap", group.by = "orig.ident")
+
+```
+
+```{r, marker for cluster mito percent,fig.height=2, fig.width=3}
+FeaturePlot(suture_mes_mito, features = c("percent.mt"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+## 1.7 Save object
+```{r, output integrated data}
+saveRDS(suture_mes_mito, file = "./SeuratObject/suture_mes_mito_harmony_20230329.rds")
+```
+
+
+# 2 Initial marker genes check
+## 2.0 Load package and datasets
+```{r load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+library(CellChat)
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito <- readRDS(file = "./SeuratObject/suture_mes_mito_harmony_20230329.rds")
+
+
+```
+
+
+## 2.1 Cell cycle score
+```{r, cell cycle score}
+# A list of cell cycle markers, from Tirosh et al, 2015, is loaded with Seurat.  We can
+# segregate this list into markers of G2/M phase and markers of S phase
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+suture_mes_mito <- CellCycleScoring(suture_mes_mito, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+```
+
+```{r,Visualize the distribution of cell cycle markers across}
+# Visualize the distribution of cell cycle markers across
+RidgePlot(suture_mes_mito, features = c("Pcna", "Top2a", "Mcm6", "Mki67"), ncol = 2)
+ggsave("./OutputFigure/suture_mes_mito_cell_cycle_RidgePlot.pdf", device = "pdf", width = 25, height = 20, units = "cm")
+DimPlot(suture_mes_mito, reduction = "umap", label = T)
+ggsave("./OutputFigure/suture_mes_mito_cell_cycle_umap_label.pdf", device = "pdf", width = 18, height = 15, units = "cm")
+DimPlot(suture_mes_mito, reduction = "umap", group.by = "orig.ident")
+ggsave("./OutputFigure/suture_mes_mito_cell_cycle_umap_group.pdf", device = "pdf", width = 18, height = 15, units = "cm")
+
+DimPlot(suture_mes_mito, reduction = "umap", split.by  = "orig.ident")
+ggsave("./OutputFigure/suture_mes_mito_cell_cycle_umap_split.pdf", device = "pdf", width = 40, height = 15, units = "cm")
+
+```
+Always remember that if you assign a new ident set, double check the active ident (of course currently it is "Phase"). Now reset the active idents.
+```{r, set the active ident to res=0.4}
+Idents(suture_mes_mito) <- c("SCT_snn_res.0.4")
+```
+
+Feature plot for cell cycle genes
+```{r, cell cycle genes feature plot split, fig.height=10, fig.width=20}
+FeaturePlot(suture_mes_mito, features = c("Pcna","Top2a",
+                                          "Mcm6","Mki67"),
+            cols = c("#ddf4f5", "#fa3c84"),
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./OutputFigure/suture_mes_mito_cell_cycle_feature_split.pdf", device = "pdf", width = 40, height = 20)
+
+```
+
+```{r, cell cycle genes feature plot, fig.height=5, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Pcna","Top2a",
+                                          "Mcm6","Mki67"),
+            cols = c("#ddf4f5", "#fa3c84"),
+            ncol=2, pt.size = 0.1)
+ggsave("./OutputFigure/suture_mes_mito_cell_cycle_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+```
+
+## 2.4 Stem cell and osteoblast markers
+```{r, stem cell genes feature plot, fig.height=5, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Lrig1","Bmi1",
+                                          "Axin2","Gli1"),
+            ncol=2, pt.size = 0.3)
+#ggsave("./OutputFigure/suture_mes_mito_stem_feature.pdf", device = "pdf", width = 15, height = 15, units = "cm")
+
+```
+
+
+```{r, stem cell genes feature plot split, fig.height=10, fig.width=20}
+FeaturePlot(suture_mes_mito, features = c("Gli1","Axin2",
+                                          "Runx2","Sp7"),
+            cols = c("#ddf4f5", "#fa3c84"),
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./OutputFigure/suture_mes_mito_stem_osteo_feature_split.png", device = "png", width = 20, height = 10)
+
+```
+```{r, vlplot for stem cell markers,fig.height=6, fig.width=10}
+VlnPlot(object = suture_mes_mito, features =  c("Gli1","Axin2",
+                                          "Runx2","Sp7"), group.by = "seurat_clusters")
+#ggsave("./OutputFigure/suture_mes_mito_stem_Markers_violinplot.pdf", device = "pdf", width = 20, height = 15, units = "cm")
+```
+
+
+```{r}
+saveRDS(suture_mes_mito, file = "./SeuratObject/suture_mes_mito_harmony_20230329.rds")
+```
+
+# 3 Marker genes identification
+## 3.1 Marker genes identification
+Identification of marker genes
+refer to `https://github.com/satijalab/seurat/issues/2115` Perform DE using RNA rather than SCT
+
+```{r, generally find marker genes}
+Idents(suture_mes_mito) <- c("SCT_snn_res.0.4")
+
+DefaultAssay(suture_mes_mito) <- "RNA"
+suture_mes_mito <- NormalizeData(suture_mes_mito)
+all.genes <- rownames(suture_mes_mito)
+suture_mes_mito <- ScaleData(suture_mes_mito, features = all.genes)
+suture_mes_mito_markers <- FindAllMarkers(object = suture_mes_mito, only.pos = TRUE, 
+                               min.pct = 0.25, thresh.use = 0.25) #identify positive marker genes 
+top10 <- suture_mes_mito_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) # You may change n=10 to other number to get top_n genes as you wish.
+```
+
+```{r, output tables for marker genes}
+write.csv(suture_mes_mito_markers, file = "./OutputTable/suture_mes_mito_markers_20230328.csv", row.names = FALSE)
+write.csv(top10, file = "./OutputTable/suture_mes_mito_top10_markers_20230328.csv", row.names = FALSE)
+
+
+```
+
+Plot heatmap for marker genes
+```{r, heatmapplot, fig.width=10, fig.height=18 }
+
+DoHeatmap(suture_mes_mito, features = top10$gene)
+ggsave("./OutputFigure/suture_mes_mito_markers_top10_20230328.pdf", device = "pdf",#adjust filename accordingly
+       width = 30, #adjust according to the display of output
+       height = 55, #adjust according to the display of output
+       units = "cm")
+
+```
+
+
+## 3.2 Rename cluster
+```{r load of packages and setup of the environment}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(gridExtra)
+library(CellChat)
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito <- readRDS(file = "./SeuratObject/suture_mes_mito_harmony_20230329.rds")
+
+
+```
+```{r, initial plot for cluster}
+DimPlot(suture_mes_mito, reduction = "umap", label = T)
+```
+```{r, initial plot for cluster, fig.width=20,fig.height=4}
+DimPlot(suture_mes_mito, reduction = "umap", label = T, split.by = "orig.ident")
+```
+```{r, initial plot for cluster, fig.width=20,fig.height=4}
+FeaturePlot(suture_mes_mito, features = "Runx2",
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1,split.by = "orig.ident")
+ggsave("./OutputFigure/suture_mes_mito_Runx2_feature_split.png", device = "png", width = 20, height = 4)
+
+```
+Here we will subset the object, given the unclear annotation for cluster 12(no specific coding gene expression)
+
+```{r, subset seurat object}
+suture_mes_mito <- subset(suture_mes_mito, idents=c(0:11))
+```
+```{r, initial plot for cluster}
+DimPlot(suture_mes_mito, reduction = "umap", label = T)
+
+```
+Here, we will first plot marker genes 
+```{r, marker for cluster 0,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Sfrp2","Tac1",
+                                          "Scx","Igfbp3"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+Thus, we name cluster 0 as ligament like cells (LIG)
+
+```{r, marker for cluster 1,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Postn","Mmp13","Npnt","Podnl1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With Mmp13 and Podnl1 highly enriched in osteogenic cluster, we name it as "OG1"
+
+```{r, marker for cluster 2,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Matn4","Cpz","Nppc","Fmod"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With highly enrichment of Matn4 and some overlap of Nppc, cluster2 must belong to outer menigeal population, making it as "MG1"
+
+
+```{r, marker for cluster 3,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Crabp2","Gsta4","Slc4a10","Fxyd5"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With highly enrichment of Crabp2 and Fxyd5, cluster 3 belongs to inner menigeal population, making it as "MG2".
+
+```{r, marker for cluster 4,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Crip1","Tnn","Npnt","Tnc"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With partially overlap of Npnt, Tnn and Tnc, we term this cluster as "OG2".
+
+
+```{r, marker for cluster 5,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Ppp1r10","Wsb1","Rasl11b","Irf1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With partial overlap with Matn4, we term this cluster as "MG3".
+
+
+```{r, marker for cluster 6,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Stmn1","Hmgb2","Top2a","Mki67"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+
+With specific enrichment of Mki67 and Top2a, which is highly associated with proliferation, we term this as "PO".
+
+```{r, marker for cluster 7,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Ccl11","Il6","Igf1","Col4a1"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With highly overlap expression pattern of Igf1, we term this cluster as "MG4".
+
+```{r, marker for cluster 8,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Bglap","Ibsp","Dmp1","Ifitm5"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With a relatively terminal differentiation marker for osteoblasts, Dmp1 and Ifitm5, we term this cluster as "OG3".
+
+```{r, marker for cluster 9,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Pi16","Ly6a","Clc3b"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+With Pi16 and Ly6a, markers for ectocranial population, we term this cluster as "EC".
+
+```{r, marker for cluster 10,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Col2a1","Mia","Mmp9","Acan"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+This cluster were termed as "Chondro" for chondrogenesis.
+
+```{r, marker for cluster 11,fig.height=4, fig.width=5}
+FeaturePlot(suture_mes_mito, features = c("Rgs5","Procr","Myh11","Gm13889"),
+            cols = c("grey85",brewer.pal(9,"YlOrRd")),
+            ncol=2, pt.size = 0.1)
+```
+This cluster were termed as "Peri" for pericytes.
+
+With "m" stands for suture mesenchyme, we renamed the following clusters.
+```{r, rename cluster}
+new.cluster.ids <- c("LIG", #Cluster 0 
+                     "OG1", #Cluster 1 
+                     "MG1", #Cluster 2 
+                     "MG2", #Cluster 3 
+                     "OG2", #Cluster 4 
+                     "MG3", #Cluster 5 
+                     "PO", #Cluster 6 
+                     "MG4", #Cluster 7 
+                     "OG3", #Cluster 8 
+                     "EC", #Cluster 9 
+                     "Chondro", #Cluster 10 
+                     "Peri", #Cluster 11
+                     "removed" #Cluster 12
+                     )
+Idents(suture_mes_mito) <- c("SCT_snn_res.0.4")
+suture_mes_mito@meta.data$seurat_clusters <-suture_mes_mito@meta.data$SCT_snn_res.0.4
+suture_mes_mito@meta.data$celltype<- suture_mes_mito@meta.data$seurat_clusters
+levels(suture_mes_mito@meta.data$celltype) <- new.cluster.ids
+```
+
+```{r,draft plot for celltype}
+DimPlot(suture_mes_mito, reduction = "umap", label = T, group.by = "celltype")
+```
+
+```{r, initial plots}
+Idents(suture_mes_mito) <- c("celltype")
+#group_by_cluster
+plot1 = DimPlot(suture_mes_mito, reduction = "umap", label = T)
+# group_by_sample
+plot2 = DimPlot(suture_mes_mito, reduction = "umap", group.by = "celltype")
+plot3 = DimPlot(suture_mes_mito, reduction = "umap", split.by  = "orig.ident")
+# combine
+plotc <- plot1 + plot2
+ggsave("./OutputFigure/suture_mes_mito_umap_celltype.png", plot = plotc, width = 10, height = 5)
+plot3
+ggsave("./OutputFigure/suture_mes_mito_umap_celltype_split.png", plot = plot3, width = 20, height = 5) # You may set the parameters, especially the "width". Usually each plot will take about 5.5 unit.
+
+DimPlot(suture_mes_mito, reduction = "umap", label = T)
+DimPlot(suture_mes_mito, reduction = "umap", group.by = "celltype")
+
+```
+
+```{r, output integrated data}
+saveRDS(suture_mes_mito, file = "./SeuratObject/suture_mes_mito_harmony_renamed.rds")
+```
+
+## 3.3 Dot plot for marker genes
+
+```{r}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(sctransform)
+library(harmony)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(monocle3)
+library(magrittr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito <- readRDS("./SeuratObject/suture_mes_mito_harmony_renamed.rds")
+
+```
+
+```{r, check the order of celltype for display}
+levels(suture_mes_mito@meta.data$celltype)
+```
+
+
+
+```{r, re-order celltype}
+suture_mes_mito$celltype <- factor(suture_mes_mito$celltype, levels = c("Peri","Chondro","EC","LIG","PO","OG1","OG2","OG3","MG1", "MG2", "MG3", "MG4","removed")) 
+levels(suture_mes_mito$celltype)
+```
+
+
+```{r,dotplot for cell types,fig.height=4, fig.width=12}
+genes_to_check_mes <- c("Rgs5","Procr","Myh11","Gm13889",  #Peri
+                        "Col2a1","Mia","Mmp9","Acan", #Chondro
+                        "Pi16","Ly6a","Clc3b", #EC
+                        "Sfrp2","Tac1", "Scx","Igfbp3",#LIG
+                        "Stmn1","Hmgb2","Top2a","Mki67", #PO
+                        "Postn","Mmp13","Npnt","Podnl1", #OG1
+                        "Crip1","Tnn","Npnt","Tnc", #OG2
+                        "Bglap","Ibsp","Dmp1","Ifitm5", #OG3
+                        "Matn4","Cpz","Nppc","Fmod", #MG1
+                        "Crabp2","Gsta4","Slc4a10","Fxyd5",#MG2
+                        "Ppp1r10","Wsb1","Rasl11b","Irf1", #MG3
+                        "Ccl11","Il6","Igf1","Col4a1" #MG4
+                        )
+
+
+DotPlot(suture_mes_mito, features = unique(genes_to_check_mes),group.by = "celltype")+RotatedAxis()+
+  scale_x_discrete("")+scale_y_discrete("")
+ggsave("./OutputFigure/suture_mes_mito_harmony_dotplot_celltype.pdf",width = 15,height = 6)
+
+```
+
+
+
+```{r,dotplot for cell types blue red color,fig.height=4, fig.width=12}
+DotPlot(suture_mes_mito, features = unique(genes_to_check_mes),
+        cols = c("lightgrey","red"),col.min = 0, col.max = 3,
+        group.by = "celltype")+
+  RotatedAxis()+
+  scale_x_discrete("")+
+  scale_y_discrete("")
+ggsave("./OutputFigure/suture_mes_mito_harmony_dotplot_celltype_red.pdf",width = 15,height = 6)
+
+
+```
+```{r, dotplot with different celltype, green and yellow,fig.height=6, fig.width=15}
+Idents(suture_mes_mito) <- suture_mes_mito$celltype
+DotPlot(suture_mes_mito, features=unique(genes_to_check_mes))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45,hjust = 0.5, vjust = 0.5))+
+  labs(x=NULL, y=NULL)+ guides(size = guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2), colours = c('#330066', '#336699','#66CC66','#FFCC33'))
+ggsave("./OutputFigure/suture_mes_mito_harmony_dotplot_celltype_green.pdf",width = 15,height = 6)
+```
+
+# 4 scVelo
+Here we will generate input for python-based scVelo analysis
+## 4.0 Load packages and datasets
+```{r,Load packages and datasets 5}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito <- readRDS(file = "./SeuratObject/suture_mes_mito_harmony_renamed.rds")
+
+```
+
+Split by PF or SAG
+
+```{r, check the plot based on group}
+plots <- DimPlot(suture_mes_mito, group.by = c("group", "celltype"), combine = FALSE, pt.size = .2)
+plots <- lapply(X = plots, FUN = function(x) x + theme(legend.position = "top") + guides(color = guide_legend(nrow = 5, 
+    byrow = TRUE, override.aes = list(size = 4))))
+CombinePlots(plots)
+```
+
+
+```{r, oject split and saved }
+suture_mes_mito_list <- SplitObject(suture_mes_mito, split.by = "group")
+suture_mes_mito_PF <-suture_mes_mito_list[["PF"]]
+saveRDS(suture_mes_mito_PF, file = "./SeuratObject/suture_mes_mito_PF_seurat_20230330.rds")
+suture_mes_mito_SAG <-suture_mes_mito_list[["SAG"]]
+saveRDS(suture_mes_mito_SAG, file = "./SeuratObject/suture_mes_mito_SAG_seurat_20230330.rds")
+
+```
+
+
+## 4.1 Loom files input
+```{r, load loom files}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+DM_PF_loom<-read.loom.matrices("./loom/DM_PF_SortedByCoordinate_TJYBG.loom") #./loom/ is a folder where you keep your loom file generated from velocyto
+DM_SAG_loom<-read.loom.matrices("./loom/DM_SAG_SortedByCoordinate_GZKNL.loom") 
+KO_PF_loom<-read.loom.matrices("./loom/KO_PF_SortedByCoordinate_N782H.loom") 
+KO_SAG_loom<-read.loom.matrices("./loom/KO_SAG_SortedByCoordinate_PV59B.loom") 
+Runx2_PF_loom<-read.loom.matrices("./loom/Runx2PF_SortedByCoordinate_M40I0.loom") 
+Runx2_SAG_loom<-read.loom.matrices("./loom/Runx2SAG_SortedByCoordinate_8PAXK.loom") 
+WT_PF_loom<-read.loom.matrices("./loom/WT_PF_SortedByCoordinate_UF4AW.loom") 
+WT_SAG_loom<-read.loom.matrices("./loom/WT_SAG_SortedByCoordinate_UERPP.loom") 
+
+DM_PF_loom <-as.Seurat(DM_PF_loom) # Convert loom into a Seurat Object
+DM_SAG_loom <-as.Seurat(DM_SAG_loom) 
+KO_PF_loom <-as.Seurat(KO_PF_loom) 
+KO_SAG_loom <-as.Seurat(KO_SAG_loom) 
+Runx2_PF_loom <-as.Seurat(Runx2_PF_loom) 
+Runx2_SAG_loom <-as.Seurat(Runx2_SAG_loom) 
+WT_PF_loom <-as.Seurat(WT_PF_loom) 
+WT_SAG_loom <-as.Seurat(WT_SAG_loom) 
+```
+
+The sequencing company will generate a loom file for us, but their prefix for each sample is not always the same as ours. 
+We need to check the prefixes for loom and Seurat object accordingly.
+
+```{r, check cell barcodes of Seurat object}
+table(suture_mes_mito@meta.data$orig.ident) 
+# DM_PF    DM_SAG     KO_PF    KO_SAG  Runx2_PF Runx2_SAG     WT_PF    WT_SAG  
+# 8532      5013      7884      9034      5280      6219      5629      6553
+suture_mes_mito@meta.data[1:3,1:3] #cell barcode started with "WT_PF_"... and ended with ""
+```
+
+```{r, check cell barcodes for loom objects}
+DM_PF_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "DM_PF_SortedByCoordinate_TJYBG:" and ended with "x"
+DM_SAG_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "DM_SAG_SortedByCoordinate_GZKNL:" and ended with "x"
+KO_PF_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "KO_PF_SortedByCoordinate_N782H:" and ended with "x"
+KO_SAG_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "KO_SAG_SortedByCoordinate_PV59B:" and ended with "x"
+Runx2_PF_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "Runx2PF_SortedByCoordinate_M40I0:" and ended with "x"
+Runx2_SAG_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "Runx2SAG_SortedByCoordinate_8PAXK:" and ended with "x"
+WT_PF_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "WT_PF_SortedByCoordinate_UF4AW:" and ended with "x"
+WT_SAG_loom@assays[["spliced"]][1:3,1:3] #cell barcode started with "WT_SAG_SortedByCoordinate_UERPP:" and ended with "x"
+```
+
+
+```{r, generate spliced and unsplice matrix}
+bm <- merge(x = DM_PF_loom, y = c(DM_SAG_loom,KO_PF_loom,
+                                  KO_SAG_loom,Runx2_PF_loom,
+                                  Runx2_SAG_loom,WT_PF_loom,
+                                  WT_SAG_loom), merge.data = TRUE)
+spliced <- CreateAssayObject(GetAssayData(bm, assay = "spliced"))
+unspliced <- CreateAssayObject(GetAssayData(bm, assay = "unspliced"))
+#ambiguous <- CreateAssayObject(GetAssayData(bm, assay = "ambiguous"))
+
+
+```
+
+Thus, the merged object will have eight kinds of barcode initials as listed above, and all of the barcodes end with "x".
+
+
+
+## 4.2 Generate (un)spliced count matrix for scVelo
+
+```{r, alter count matrix ID}
+spliced@counts[1:3,1:3]
+spliced_cells <- as.data.frame(spliced@counts)
+spliced_cells[1:3,1:3]
+head(colnames(spliced_cells))
+colnames(spliced_cells) <- gsub("x", "", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+colnames(spliced_cells) <- gsub("DM_PF_SortedByCoordinate_TJYBG:", "Runx2_PF_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+colnames(spliced_cells) <- gsub("DM_SAG_SortedByCoordinate_GZKNL:", "Runx2_SAG_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+colnames(spliced_cells) <- gsub("KO_PF_SortedByCoordinate_N782H:", "KO_PF_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+colnames(spliced_cells) <- gsub("KO_SAG_SortedByCoordinate_PV59B:", "KO_SAG_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+colnames(spliced_cells) <- gsub("Runx2PF_SortedByCoordinate_M40I0:", "DM_PF_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+colnames(spliced_cells) <- gsub("Runx2SAG_SortedByCoordinate_8PAXK:", "DM_SAG_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+colnames(spliced_cells) <- gsub("WT_PF_SortedByCoordinate_UF4AW:", "WT_PF_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+colnames(spliced_cells) <- gsub("WT_SAG_SortedByCoordinate_UERPP:", "WT_SAG_", colnames(spliced_cells))
+spliced_cells[1:3,1:3]
+
+```
+
+```{r,generate spliced count matrix for scvelo}
+# Export count matrix
+write.csv(x = t(as.matrix(spliced_cells)), file = './scVeloInput/suture_mes_mito_spliced.csv')
+rm(spliced_cells)
+
+```
+```{r}
+rm(spliced)
+```
+
+
+```{r, work with count matrix of unspliced}
+unspliced@counts[1:3,1:3]
+unspliced_cells <- as.data.frame(unspliced@counts)
+unspliced_cells[1:3,1:3]
+head(colnames(unspliced_cells))
+colnames(unspliced_cells) <- gsub("x", "", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+colnames(unspliced_cells) <- gsub("DM_PF_SortedByCoordinate_TJYBG:", "Runx2_PF_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+colnames(unspliced_cells) <- gsub("DM_SAG_SortedByCoordinate_GZKNL:", "Runx2_SAG_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+colnames(unspliced_cells) <- gsub("KO_PF_SortedByCoordinate_N782H:", "KO_PF_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+colnames(unspliced_cells) <- gsub("KO_SAG_SortedByCoordinate_PV59B:", "KO_SAG_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+colnames(unspliced_cells) <- gsub("Runx2PF_SortedByCoordinate_M40I0:", "DM_PF_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+colnames(unspliced_cells) <- gsub("Runx2SAG_SortedByCoordinate_8PAXK:", "DM_SAG_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+colnames(unspliced_cells) <- gsub("WT_PF_SortedByCoordinate_UF4AW:", "WT_PF_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+colnames(unspliced_cells) <- gsub("WT_SAG_SortedByCoordinate_UERPP:", "WT_SAG_", colnames(unspliced_cells))
+unspliced_cells[1:3,1:3]
+
+```
+
+```{r,generate unspliced count matrix for scvelo}
+# Export count matrix
+write.csv(x = t(as.matrix(unspliced_cells)), file = './scVeloInput/suture_mes_mito_unspliced.csv')
+rm(unspliced_cells)
+rm(unspliced)
+```
+
+The above two matrics will be further merged into one AnnData in SCANPY, with two layers.
+
+## 4.3 Cell attribute matrix for the whole suture_mes_mito object
+```{r, prepare parameter matrix of combined JE for scvelo}
+# Export filtered cell ID
+suture_mes_mito_cells <- as.data.frame(Cells(suture_mes_mito))
+head(suture_mes_mito_cells)
+write.csv(suture_mes_mito_cells, file = "./scVeloInput/suture_mes_mito_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito <- Embeddings(suture_mes_mito, reduction = "umap")
+head(suture_mes_mito)
+umap_suture_mes_mito[1:3,1:2]
+write.csv(umap_suture_mes_mito, file = "./scVeloInput/suture_mes_mito_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito@meta.data$celltype) #
+cluster_head <-suture_mes_mito@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_cells$`Cells(suture_mes_mito)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_clusters.csv",row.names = FALSE)
+```
+
+## 4.4 Cell attribute matrix for suture_mes_mito_PF object
+```{r, prepare parameter matrix of combined JE for scvelo}
+# Export filtered cell ID
+suture_mes_mito_PF_cells <- as.data.frame(Cells(suture_mes_mito_PF))
+head(suture_mes_mito_PF_cells)
+write.csv(suture_mes_mito_PF_cells, file = "./scVeloInput/suture_mes_mito_PF_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_PF <- Embeddings(suture_mes_mito_PF, reduction = "umap")
+head(suture_mes_mito_PF)
+umap_suture_mes_mito_PF[1:3,1:2]
+write.csv(umap_suture_mes_mito_PF, file = "./scVeloInput/suture_mes_mito_PF_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_PF@meta.data$celltype) #
+cluster_head <-suture_mes_mito_PF@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_PF_cells$`Cells(suture_mes_mito_PF)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_PF_clusters.csv",row.names = FALSE)
+```
+
+
+## 4.5 Cell attribute matrix for suture_mes_mito_SAG object
+```{r, prepare parameter matrix of combined JE for scvelo}
+# Export filtered cell ID
+suture_mes_mito_SAG_cells <- as.data.frame(Cells(suture_mes_mito_SAG))
+head(suture_mes_mito_SAG_cells)
+write.csv(suture_mes_mito_SAG_cells, file = "./scVeloInput/suture_mes_mito_SAG_cellID_obs.csv",row.names = FALSE)
+
+# Export umap coordinates
+umap_suture_mes_mito_SAG <- Embeddings(suture_mes_mito_SAG, reduction = "umap")
+head(suture_mes_mito_SAG)
+umap_suture_mes_mito_SAG[1:3,1:2]
+write.csv(umap_suture_mes_mito_SAG, file = "./scVeloInput/suture_mes_mito_SAG_cell_embeddings.csv",row.names = TRUE)
+
+# Export cluster information
+## Here we used cluster information but not celltype information. If you are interested in celltype information, you can go for it accordingly.
+head(suture_mes_mito_SAG@meta.data$celltype) #
+cluster_head <-suture_mes_mito_SAG@meta.data$celltype # Optional
+cluster_head <- as.data.frame(cluster_head)
+cluster_info <- cbind(suture_mes_mito_SAG_cells$`Cells(suture_mes_mito_SAG)`, cluster_head)
+colnames(cluster_info) <- c("Unnamed", "celltype") #if you are working with celltype, change `seurat_cluster` or `celltype` accordingly.
+write.csv(cluster_info, file = "./scVeloInput/suture_mes_mito_SAG_clusters.csv",row.names = FALSE)
+```
+
+# 5 Split OG cluster
+## 5.1 Load packages and dataset
+```{r,Load packages and datasets}
+gc()
+rm(list=ls())
+library(Seurat)
+library(SeuratWrappers)
+library(data.table)
+library(scales)
+library(plotly)
+library(ggplot2)
+library(ggpointdensity)
+library(magrittr)
+library(velocyto.R)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(gridExtra)
+
+set.seed(12)
+theme_set(theme_bw())
+
+suture_mes_mito <- readRDS(file = "./SeuratObject/suture_mes_mito_harmony_renamed.rds")
+
+```
+## 5.2 Split by cluster/celltype
+```{r}
+
+suture_mes_mito_OG1 <- subset(suture_mes_mito, idents="OG1")
+suture_mes_mito_OG2 <- subset(suture_mes_mito, idents="OG2")
+suture_mes_mito_OG3 <- subset(suture_mes_mito, idents="OG3")
+suture_mes_mito_OG <- subset(suture_mes_mito, idents=c("OG1","OG2","OG3"))
+```
+
+```{r}
+saveRDS(suture_mes_mito_OG1, file = "./SeuratObject/suture_mes_mito_OG1_seurat_20230330.rds")
+saveRDS(suture_mes_mito_OG2, file = "./SeuratObject/suture_mes_mito_OG2_seurat_20230330.rds")
+saveRDS(suture_mes_mito_OG3, file = "./SeuratObject/suture_mes_mito_OG3_seurat_20230330.rds")
+saveRDS(suture_mes_mito_OG, file = "./SeuratObject/suture_mes_mito_OG_seurat_20230330.rds")
+```
+
+```{r}
+suture_mes_mito_OG <- RunUMAP(object = suture_mes_mito_OG, assay = "SCT", reduction = "harmony", dims = 1:50) #You may probe dims in details
+Idents(suture_mes_mito_OG) <- "celltype"
+DimPlot(suture_mes_mito_OG, reduction = "umap", label = T)
+```
+
+
+
+## 5.3 DEGs in OG3 in OG population
+
+
+```{r}
+suture_mes_mito_OG$celltype.group <- paste(suture_mes_mito_OG$celltype, suture_mes_mito_OG$orig.ident, sep = "_")
+suture_mes_mito_OG$celltype <- Idents(suture_mes_mito_OG)
+Idents(suture_mes_mito_OG) <- "celltype.group"
+table(suture_mes_mito_OG$celltype.group)
+```
+
+```{r}
+cellfordeg<-as.factor(rownames(table(suture_mes_mito_OG$orig.ident)))
+cellfordeg
+```
+
+```{r}
+DefaultAssay(suture_mes_mito_OG) <- "RNA"
+mydeg <- FindMarkers(suture_mes_mito_OG,ident.1 = 'OG3_WT_SAG',ident.2 = 'OG3_Runx2_SAG', verbose = FALSE, test.use = 'wilcox',min.pct = 0.1)
+head(mydeg)
+```
+Generate and harvest the top20 changed genes among different gennotypes.
+```{r}
+DefaultAssay(suture_mes_mito_OG) <- "RNA"
+n <- length(cellfordeg)  # get the length of the list
+for (i in 1:(n-1)) {  # iterate through all pairs of elements
+  for (j in (i+1):n) {
+  CELLDEG_OG3 <- FindMarkers(suture_mes_mito_OG, ident.1 = paste0("OG3_", cellfordeg[[i]]), ident.2 = paste0("OG3_",cellfordeg[[j]]), verbose = FALSE)
+    top10 <- CELLDEG_OG3 %>% top_n(n = 20, wt = avg_log2FC) # You may change n=20 to other number to get top_n genes as you wish.
+  write.csv(top10,paste0("OG3_", cellfordeg[i],"_", cellfordeg[[j]] ,"_top20.CSV"))
+  }
+}
+
+```
+
+Gather all DEs for OG3
+```{r}
+# list all the CSV files in the directory
+files <- list.files(pattern = "*_top20.CSV")
+# create an empty list to store the dataframes
+unique_vals <- list()
+# loop through each file and read it into a dataframe and add it to the list
+for (file in files) {
+  df <- read.csv(file, stringsAsFactors = FALSE)
+  unique_vals[[file]] <- unique(df[,1])
+}
+
+
+# combine all the unique values into one vector and remove duplicates
+unique_first_col <- unique(unlist(unique_vals))
+```
+
+```{r}
+OG3_DE <- as.factor(unique_first_col)
+```
+
+
+## 5.4 Seurat for DEs in OG3
+Here we subset the OG3 object using all the DEs in OG3.
+
+```{r}
+
+suture_mes_mito_OG3_DE <- subset(suture_mes_mito_OG, features = OG3_DE)
+Idents(suture_mes_mito_OG3_DE) <- "celltype"
+suture_mes_mito_OG3_DE <- subset(suture_mes_mito_OG3_DE, idents = "OG3")
+```
+
+```{r}
+suture_mes_mito_OG3_DE_matrix <- suture_mes_mito_OG3_DE@assays$RNA@data
+```
+
+Remove the barcode information
+```{r}
+suture_mes_mito_OG3_DE_matrix@Dimnames[[2]] <- gsub("WT_SAG.*", "WT_SAG",suture_mes_mito_OG3_DE_matrix@Dimnames[[2]])
+suture_mes_mito_OG3_DE_matrix@Dimnames[[2]] <- gsub("KO_SAG.*", "KO_SAG",suture_mes_mito_OG3_DE_matrix@Dimnames[[2]])
+suture_mes_mito_OG3_DE_matrix@Dimnames[[2]] <- gsub("Runx2_SAG.*", "Runx2_SAG",suture_mes_mito_OG3_DE_matrix@Dimnames[[2]])
+suture_mes_mito_OG3_DE_matrix@Dimnames[[2]] <- gsub("DM_SAG.*", "DM_SAG",suture_mes_mito_OG3_DE_matrix@Dimnames[[2]])
+
+suture_mes_mito_OG3_DE_matrix@Dimnames[[2]] <- gsub("WT_PF.*", "WT_PF",suture_mes_mito_OG3_DE_matrix@Dimnames[[2]])
+suture_mes_mito_OG3_DE_matrix@Dimnames[[2]] <- gsub("KO_PF.*", "KO_PF",suture_mes_mito_OG3_DE_matrix@Dimnames[[2]])
+suture_mes_mito_OG3_DE_matrix@Dimnames[[2]] <- gsub("Runx2_PF.*", "Runx2_PF",suture_mes_mito_OG3_DE_matrix@Dimnames[[2]])
+suture_mes_mito_OG3_DE_matrix@Dimnames[[2]] <- gsub("DM_PF.*", "DM_PF",suture_mes_mito_OG3_DE_matrix@Dimnames[[2]])
+```
+
+Generate matrix
+
+```{r}
+df <- (as.matrix(suture_mes_mito_OG3_DE_matrix))
+df[1:3, 1:5]
+```
+Here, we want to check the number and sequence of the 8 genotype_tissue
+```{r}
+
+# Convert the first row of the matrix into a factor variable
+factors <- factor(colnames(df), levels = unique(colnames(df)))
+
+
+# Get the unique factor sequences and their frequencies
+unique_seqs <- table(factors)
+
+# Print the unique factor sequences and their frequencies
+cat("Unique factor sequences:\n")
+for (i in seq_along(unique_seqs)) {
+  cat("\t", names(unique_seqs)[i], ": ", unique_seqs[i], "\n")
+}
+
+   #WT_PF :  250 
+	 #WT_SAG :  361 
+	 #Runx2_PF :  279 
+	 #Runx2_SAG :  60 
+	 #KO_PF :  190 
+	 #KO_SAG :  557 
+	 #DM_PF :  127 
+	 #DM_SAG :  267 
+```
+But from 5.4, we found such sequence of display is not very acceptable. And we want to reorder them as ("WT_PF", "Runx2_PF", "KO_PF", "DM_PF", "WT_SAG", "Runx2_SAG", "KO_SAG","DM_SAG")
+```{r}
+dim(df)
+# Define the new order of column names
+new_order <- c(rep("WT_PF", 250), rep("Runx2_PF", 279), rep("KO_PF", 190), rep("DM_PF", 127),
+               rep("WT_SAG", 361), rep("Runx2_SAG", 60), rep("KO_SAG", 557), rep("DM_SAG", 267))
+
+
+# Reorder the columns of the matrix
+df_reordered <- df[, order(match(colnames(df), new_order))]
+
+dim(df_reordered)
+```
+
+```{r}
+df_reordered[1:3, 1:5]
+# Since these column are with same colname, we want to make them unique.
+colnames(df_reordered) <- c(paste0("WT_PF_", 1:250), paste0("Runx2_PF_", 1:279), paste0("KO_PF_", 1:190), paste0("DM_PF_", 1:127), paste0("WT_SAG_", 1:361), paste0("Runx2_SAG_", 1:60), paste0("KO_SAG_", 1:557), paste0("DM_SAG_", 1:267))
+  
+  
+```
+
+Generate an annotation dataframe to annotate each column
+```{r}
+annotation_col = data.frame(
+  group = c(rep("WT_PF", 250), rep("Runx2_PF", 279), rep("KO_PF", 190), rep("DM_PF", 127),
+               rep("WT_SAG", 361), rep("Runx2_SAG", 60), rep("KO_SAG", 557), rep("DM_SAG", 267))
+
+)
+row.names(annotation_col) <- colnames(df_reordered)
+```
+Generate an annotation dataframe for color
+```{r}
+groupcolor <- c("#FF5733","#FFC300","#FF4081","#7B1FA2",
+                '#4CAF50','#2196F3','#795548','#2C427E') 
+names(groupcolor) <- c("WT_PF","Runx2_PF","KO_PF","DM_PF",
+                       "WT_SAG","Runx2_SAG","KO_SAG","DM_SAG") # group id
+
+ann_colors <- list(group=groupcolor) #You may add more catergories according to your designn
+```
+
+
+```{r}
+dim(df_reordered)
+ph_cluster_test <- function(x,j){
+  n=t(scale(t(x)))
+  head(n)
+  n[n>4]=4 #Set upper limit, values greater than 4 equal to 4
+  n[n< -4]= -4 #Set lower limit, values less than -4 equal to -4
+  head(n)
+  n[1:4,1:4]
+  m<- paste(x,"_ph",sep = "_")
+  m<-pheatmap(n,cluster_rows = T,cluster_cols = F,
+         color=colorRampPalette(c("navy","white","firebrick3"))(100),
+         show_colnames = F,border_color = NA,show_rownames =T,
+         annotation_col = annotation_col,
+         annotation_colors = ann_colors,
+         cutree_row = j, cutree_cols = 5)
+  m
+  return(m)
+}
+
+
+
+```
+
+
+```{r,fig.height=15, fig.width=10}
+library(pheatmap)
+
+tdf_test<-ph_cluster_test(df_reordered,12)
+```
+
+
+
+
+

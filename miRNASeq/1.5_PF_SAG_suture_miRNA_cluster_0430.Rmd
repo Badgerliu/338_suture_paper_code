@@ -1,0 +1,181 @@
+---
+title: "PF_SAG_suture_miRNA_cluster_2"
+output: html_document
+date: "2025-04-30"
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  echo = TRUE,
+  cache.lazy = FALSE)
+```
+Here we clustered DEGs in either PF or SAG suture miRNA-seq results. 
+
+# 0 Package load
+```{r}
+gc()
+rm(list=ls())
+library(tidyverse)
+library(pheatmap)
+library(edgeR)
+```
+
+
+# 1 Load and prepare data
+1.1 Load data
+```{r, load expression data}
+suture_miR <- read.csv("miR_suture.csv")
+PF_sig <- read.csv("PF_miR_exp.csv")
+SAG_sig <- read.csv("SAG_miR_exp.csv")
+head(SAG_sig)
+```
+1.2 Merge expression profile with all DEG miRNA IDs
+```{r}
+# Correcting the approach
+DEG_PF_SAG <- unique(c(PF_sig$miRNA, SAG_sig$miRNA))
+
+# Subset suture_miR by miRNA names in DEG_PF_SAG
+suture_sig_miR <- suture_miR[suture_miR$miRNA %in% DEG_PF_SAG, ]
+suture_sig_miR <- suture_sig_miR[, c("miRNA", "D0PF1", "D0PF2", "D7PF1", "D7PF2", 
+                                             "D0SAG1", "D0SAG2", "D7SAG1","D7SAG2")]
+
+# View the result
+head(suture_sig_miR)
+dim(suture_sig_miR)
+```
+
+# 2 Annotate miRNA expression trend
+```{r}
+# Create a list to store rows with NA values
+rows_with_na <- list()
+
+# Initialize the Trend column with empty strings
+suture_sig_miR$Trend <- ""
+
+# Iterate over each row and annotate trends
+for (i in 1:nrow(suture_sig_miR)) {
+  row <- suture_sig_miR[i,]
+  
+  # Calculate averages for PF and SAG at D0 and D7, ignoring NA values
+  avg_D0_PF <- mean(c(row$D0PF1, row$D0PF2), na.rm = TRUE)
+  avg_D7_PF <- mean(c(row$D7PF1, row$D7PF2), na.rm = TRUE)
+  avg_D0_SAG <- mean(c(row$D0SAG1, row$D0SAG2), na.rm = TRUE)
+  avg_D7_SAG <- mean(c(row$D7SAG1, row$D7SAG2), na.rm = TRUE)
+  
+  # Check if any averages are NA
+  if (is.na(avg_D0_PF) || is.na(avg_D7_PF) || is.na(avg_D0_SAG) || is.na(avg_D7_SAG)) {
+    # Store the row index or the actual row with NA
+    rows_with_na[[length(rows_with_na) + 1]] <- row
+  } else {
+    # Annotate based on trends
+    if (avg_D7_PF > avg_D0_PF && avg_D7_SAG > avg_D0_SAG) suture_sig_miR$Trend[i] <- "UBT"
+    if (avg_D7_PF < avg_D0_PF && avg_D7_SAG < avg_D0_SAG) suture_sig_miR$Trend[i] <- "DBT"
+    if (avg_D7_PF > avg_D0_PF && avg_D7_SAG <= avg_D0_SAG) suture_sig_miR$Trend[i] <- "CSU-PF"
+    if (avg_D7_PF < avg_D0_PF && avg_D7_SAG >= avg_D0_SAG) suture_sig_miR$Trend[i] <- "CSD-PF"
+    if (avg_D7_SAG > avg_D0_SAG && avg_D7_PF <= avg_D0_PF) suture_sig_miR$Trend[i] <- "CSU-SAG"
+    if (avg_D7_SAG < avg_D0_SAG && avg_D7_PF >= avg_D0_PF) suture_sig_miR$Trend[i] <- "CSD-SAG"
+    if (avg_D7_PF > avg_D0_PF && avg_D7_SAG < avg_D0_SAG) suture_sig_miR$Trend[i] <- "IVT_PF"
+    if (avg_D7_PF < avg_D0_PF && avg_D7_SAG > avg_D0_SAG) suture_sig_miR$Trend[i] <- "IVT_SAG"
+  }
+}
+
+# Combine the rows with NA into a new dataframe if needed
+rows_with_na_df <- do.call(rbind, rows_with_na)
+
+# Display rows with NA
+print(rows_with_na_df)
+
+```
+
+```{r}
+# Checking trend annotation
+
+head(suture_sig_miR)
+```
+
+Export the trend annotation
+```{r}
+write.csv(suture_sig_miR, file="PN7_suture_PF_SAG_DEG_miR_exp_trend.csv",row.names = FALSE)
+```
+
+Subset by Trend
+```{r}
+suture_miR_DBT <- subset(suture_sig_miR, Trend =="DBT")
+write.csv(suture_miR_DBT, file = "PF_SAG_DEG_miR_DBT_exp.csv",row.names = FALSE)
+
+```
+
+```{r}
+suture_miR_UBT <- subset(suture_sig_miR, Trend =="UBT")
+write.csv(suture_miR_UBT, file = "PF_SAG_DEG_miR_UBT_exp.csv",row.names = FALSE)
+```
+
+
+# 3 Plot
+## 3.1 heatmap function
+```{r}
+ph_cluster <- function(x) {
+  # Ensure there's data before proceeding
+  if (nrow(x) == 0) {
+    stop("The subset data is empty. Please check the filtering condition.")
+  }
+  
+  y <- x[, 2:9]  # Extract the data matrix (samples)
+  n <- t(scale(t(y)))  # Scale the data (normalize)
+  
+  row.names(n) <- x[, 1]  # Set row names to the first column (gene names)
+  
+  # Apply thresholds to the scaled data
+  n[n > 4] <- 4
+  n[n < -4] <- -4
+  
+  # If there is only 1 row of data, do not perform clustering
+  if (nrow(n) == 1) {
+    # Plot heatmap without clustering
+    pheatmap(n, show_colnames = TRUE, show_rownames = TRUE, cluster_cols = FALSE, 
+             cutree_rows = 1, filename = paste(deparse(substitute(x)), '_heatmap.pdf', sep = ""))
+  } else {
+    # Plot heatmap without clustering
+    pheatmap(n, show_colnames = TRUE, show_rownames = FALSE, cluster_cols = FALSE, 
+             cutree_rows = 1, filename = paste(deparse(substitute(x)), '_heatmap.pdf', sep = ""))
+  }
+  
+  # Generate and return the heatmap object
+  m <- pheatmap(n, show_colnames = TRUE, show_rownames = TRUE, cluster_cols = FALSE)
+  return(m)
+}
+
+```
+
+## 3.2 plot heatmap for UBT miR
+```{r}
+# Call the updated heatmap function
+ph_cluster(suture_miR_DBT)
+```
+
+## 3.3 plot heatmap for UBT
+```{r}
+suture_miR_UBT <- subset(suture_sig_miR, Trend =="UBT")
+ph_cluster(suture_miR_UBT)
+```
+
+
+
+## 3.4 plot heatmap for IVT_SAG
+```{r}
+suture_miR_IVT_SAG <- subset(suture_sig_miR, Trend =="IVT_SAG")
+ph_cluster(suture_miR_IVT_SAG)
+```
+## 3.5 plot heatmap for IVT_PF
+```{r}
+#suture_miR_IVT_PF <- subset(suture_sig_miR, Trend =="IVT_PF")
+#ph_cluster(suture_miR_IVT_PF)
+```
+
+
+## X R session info
+```{r,R session info}
+sessionInfo()
+```

@@ -1,0 +1,234 @@
+---
+title: "PF_SAG_miRNAseq_DEG"
+author: "Huan Liu"
+date: "2024-12-02"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = TRUE,
+  warning = FALSE,
+  cache = TRUE,
+  echo = TRUE,
+  cache.lazy = FALSE)
+```
+Here we generated DEGs in either PF or SAG suture miRNA-seq results using MSCs isolated from PN7 PF or SAG suture. 
+
+# 0 Package load
+```{r}
+gc()
+rm(list=ls())
+library(tidyverse)
+library(pheatmap)
+library(edgeR)
+```
+
+# 1 Import datasets
+```{r}
+PF_miR <- read.csv("miR_PF_count.csv", row.names = 1)
+SAG_miR <- read.csv("miR_SAG_count.csv", row.names = 1)
+```
+
+Assign group information
+```{r}
+group <- rep(c('D0', 'D7'), each = 2)
+```
+
+
+# 2 PF DEG
+## 2.1 Prepare EdgeR for PF and normalization
+```{r}
+# Data preprocessing
+# (1) Create a DGEList object
+dgelist_PF <- DGEList(counts = PF_miR, group = group)
+
+# (2) Filter low-count data, for example using CPM normalization (recommended)
+keep_PF <- rowSums(cpm(dgelist_PF) > 1 ) >= 2
+dgelist_PF <- dgelist_PF[keep_PF, , keep.lib.sizes = FALSE]
+
+# (3) Normalize using TMM as an example
+dgelist_norm_PF <- calcNormFactors(dgelist_PF, method = 'TMM')
+
+```
+
+## 2.2 Generate DEG list
+```{r}
+# Differentially expressed gene analysis
+# First, create a design matrix based on grouping information. Ensure the control group is first, followed by the treatment group.
+design <- model.matrix(~group)
+
+# (1) Estimate the dispersion of gene expression values
+dge <- estimateDisp(dgelist_norm_PF, design, robust = TRUE)
+
+# (2) Model fitting. EdgeR provides various fitting algorithms.
+# Negative binomial generalized linear model
+fit <- glmFit(dge, design, robust = TRUE)
+lrt <- topTags(glmLRT(fit), n = nrow(dgelist_PF$counts))
+
+write.table(lrt, 'D0_D7_PF.glmLRT.txt', sep = '\t', col.names = NA, quote = FALSE)
+
+# Quasi-likelihood negative binomial generalized linear model
+fit <- glmQLFit(dge, design, robust = TRUE)
+lrt <- topTags(glmQLFTest(fit), n = nrow(dgelist_PF$counts))
+
+write.table(lrt, 'D0_D7_PF.glmQLFit.txt', sep = '\t', col.names = NA, quote = FALSE)
+
+```
+
+## 2.3 Filter DEG list
+Using the results from the negative binomial generalized linear model:
+```{r}
+# Filter differentially expressed genes
+# Read the DEG results output above
+gene_diff <- read.delim('D0_D7_PF.glmLRT.txt', row.names = 1, sep = '\t', check.names = FALSE)
+
+# First, sort the table by ascending FDR values, and for equal FDR values, sort by descending log2FC values
+gene_diff <- gene_diff[order(gene_diff$FDR, gene_diff$logFC, decreasing = c(FALSE, TRUE)), ]
+
+# log2FC≥1 & FDR<0.01 indicates "up", representing significantly upregulated genes
+# log2FC≤-1 & FDR<0.01 indicates "down", representing significantly downregulated genes
+# Others are marked as "none", representing non-differential genes
+gene_diff[which(gene_diff$logFC >= 1 & gene_diff$FDR < 0.01),'sig'] <- 'up'
+gene_diff[which(gene_diff$logFC <= -1 & gene_diff$FDR < 0.01),'sig'] <- 'down'
+gene_diff[which(abs(gene_diff$logFC) <= 1 | gene_diff$FDR >= 0.01),'sig'] <- 'none'
+
+# Output the complete DEG table
+PF_miR_sig <- subset(gene_diff, sig %in% c('up', 'down'))
+write.table(PF_miR_sig, file = 'D0_D7_PF.glmLRT.select.txt', sep = '\t', col.names = NA, quote = FALSE)
+PF_miR_sig$miRNA <- rownames(PF_miR_sig)
+write.csv(PF_miR_sig, file='PF_miR_sig.csv', row.names = FALSE)
+
+# Separate outputs for "up" and "down" genes
+gene_diff_up <- subset(gene_diff, sig == 'up')
+gene_diff_down <- subset(gene_diff, sig == 'down')
+
+write.table(gene_diff_up, file = 'D0_D7_PF.glmLRT.up.txt', sep = '\t', col.names = NA, quote = FALSE)
+write.table(gene_diff_down, file = 'D0_D7_PF.glmLRT.down.txt', sep = '\t', col.names = NA, quote = FALSE)
+
+```
+
+## 2.4 Merge DEGmiR in PF with expression
+```{r}
+# Add rownames as a new column in each dataframe
+PF_miR_sig$miRNA <- rownames(PF_miR_sig)
+PF_miR$miRNA <- rownames(PF_miR)
+
+# Merge the two dataframes by the "miRNA" column
+PF_miR_sig_exp <- merge(PF_miR_sig, PF_miR, by = "miRNA", all = FALSE)
+
+# Optionally, restore rownames and remove the miRNA column
+#rownames(merged_df) <- merged_df$miRNA
+#merged_df$miRNA <- NULL
+
+# View the merged dataframe
+head(PF_miR_sig_exp)
+
+## export PF_miR_sig_exp
+PF_miR_sig_exp <- PF_miR_sig_exp[-c(2:7)]
+head(PF_miR_sig_exp)
+
+write.csv(PF_miR_sig_exp, file='PF_miR_exp.csv',row.names = FALSE)
+
+```
+
+
+
+# 3 SAG DEG
+## 3.1 Prepare EdgeR for SAG and normalization
+```{r}
+# Data preprocessing
+# (1) Create a DGEList object
+dgelist_SAG <- DGEList(counts = SAG_miR, group = group)
+
+# (2) Filter low-count data, for example using CPM normalization (recommended)
+keep_SAG <- rowSums(cpm(dgelist_SAG) > 1 ) >= 2
+dgelist_SAG <- dgelist_SAG[keep_SAG, , keep.lib.sizes = FALSE]
+
+# (3) Normalize using TMM as an example
+dgelist_norm_SAG <- calcNormFactors(dgelist_SAG, method = 'TMM')
+
+```
+
+## 3.2 Generate DEG list
+```{r}
+# Differentially expressed gene analysis
+# First, create a design matrix based on grouping information. Ensure the control group is first, followed by the treatment group.
+design <- model.matrix(~group)
+
+# (1) Estimate the dispersion of gene expression values
+dge <- estimateDisp(dgelist_norm_SAG, design, robust = TRUE)
+
+# (2) Model fitting. EdgeR provides various fitting algorithms.
+# Negative binomial generalized linear model
+fit <- glmFit(dge, design, robust = TRUE)
+lrt <- topTags(glmLRT(fit), n = nrow(dgelist_SAG$counts))
+
+write.table(lrt, 'D0_D7_SAG.glmLRT.txt', sep = '\t', col.names = NA, quote = FALSE)
+
+# Quasi-likelihood negative binomial generalized linear model
+fit <- glmQLFit(dge, design, robust = TRUE)
+lrt <- topTags(glmQLFTest(fit), n = nrow(dgelist_SAG$counts))
+
+write.table(lrt, 'D0_D7_SAG.glmQLFit.txt', sep = '\t', col.names = NA, quote = FALSE)
+
+```
+
+## 3.3 Filter DEG list
+Using the results from the negative binomial generalized linear model:
+```{r}
+# Filter differentially expressed genes
+# Read the DEG results output above
+gene_diff <- read.delim('D0_D7_SAG.glmLRT.txt', row.names = 1, sep = '\t', check.names = FALSE)
+
+# First, sort the table by ascending FDR values, and for equal FDR values, sort by descending log2FC values
+gene_diff <- gene_diff[order(gene_diff$FDR, gene_diff$logFC, decreasing = c(FALSE, TRUE)), ]
+
+# log2FC≥1 & FDR<0.01 indicates "up", representing significantly upregulated genes
+# log2FC≤-1 & FDR<0.01 indicates "down", representing significantly downregulated genes
+# Others are marked as "none", representing non-differential genes
+gene_diff[which(gene_diff$logFC >= 1 & gene_diff$FDR < 0.01),'sig'] <- 'up'
+gene_diff[which(gene_diff$logFC <= -1 & gene_diff$FDR < 0.01),'sig'] <- 'down'
+gene_diff[which(abs(gene_diff$logFC) <= 1 | gene_diff$FDR >= 0.01),'sig'] <- 'none'
+
+# Output the complete DEG table
+SAG_miR_sig <- subset(gene_diff, sig %in% c('up', 'down'))
+write.table(SAG_miR_sig, file = 'D0_D7_SAG.glmLRT.select.txt', sep = '\t', col.names = NA, quote = FALSE)
+SAG_miR_sig$miRNA <- rownames(SAG_miR_sig)
+write.csv(SAG_miR_sig, file='SAG_miR_sig.csv', row.names = FALSE)
+
+# Separate outputs for "up" and "down" genes
+gene_diff_up <- subset(gene_diff, sig == 'up')
+gene_diff_down <- subset(gene_diff, sig == 'down')
+
+write.table(gene_diff_up, file = 'D0_D7_SAG.glmLRT.up.txt', sep = '\t', col.names = NA, quote = FALSE)
+write.table(gene_diff_down, file = 'D0_D7_SAG.glmLRT.down.txt', sep = '\t', col.names = NA, quote = FALSE)
+
+```
+
+## 3.4 Merge DEGmiR in SAG with expression
+```{r}
+# Add rownames as a new column in each dataframe
+SAG_miR_sig$miRNA <- rownames(SAG_miR_sig)
+SAG_miR$miRNA <- rownames(SAG_miR)
+
+# Merge the two dataframes by the "miRNA" column
+SAG_miR_sig_exp <- merge(SAG_miR_sig, SAG_miR, by = "miRNA", all = FALSE)
+
+# Optionally, restore rownames and remove the miRNA column
+#rownames(merged_df) <- merged_df$miRNA
+#merged_df$miRNA <- NULL
+
+# View the merged dataframe
+head(SAG_miR_sig_exp)
+
+## export SAG_miR_sig_exp
+SAG_miR_sig_exp <- SAG_miR_sig_exp[-c(2:7)]
+head(SAG_miR_sig_exp)
+
+write.csv(SAG_miR_sig_exp, file='SAG_miR_exp.csv',row.names = FALSE)
+
+```
+## X R session info
+```{r,R session info}
+sessionInfo()
+```
